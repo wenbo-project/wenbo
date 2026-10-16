@@ -1,5 +1,9 @@
 # AgentX
 
+<p align="center">
+|  <a href="https://wenbo.readthedocs.io/en/latest/introduction.html"><b>Documentation</b></a>  |
+</p>
+
 AgentX is an event-driven scheduler for running multiple DAG-shaped LLM workflows with bounded concurrency. 
 
 AgentX 是一个面向 LLM 工作流的多 DAG 调度系统。
