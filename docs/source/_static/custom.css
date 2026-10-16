@@ -1,0 +1,50 @@
+.wenbo-brand,
+.wenbo-brand:link,
+.wenbo-brand:visited,
+.wenbo-brand:hover,
+.wenbo-brand:active {
+    color: var(--color-sidebar-brand-text);
+    text-decoration: none;
+}
+
+.wenbo-brand-text {
+    color: inherit;
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.25;
+    text-decoration: none;
+}
+
+@media (min-width: 67em) {
+    .wenbo-brand {
+        margin-top: 1.75rem;
+    }
+}
+
+article[role="main"] h2 {
+    font-size: 1.5rem;
+    line-height: 1.3;
+}
+
+.autosummary table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-left: 0;
+}
+
+.autosummary table th:first-child,
+.autosummary table td:first-child {
+    width: 150px;
+    text-align: left;
+}
+
+.custom-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.custom-table th:first-child,
+.custom-table td:first-child {
+    width: 150px;
+    text-align: left;
+}
