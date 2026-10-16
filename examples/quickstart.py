@@ -1,4 +1,4 @@
-"""Run a self-contained AgentX scheduling example with MockBackend.
+"""Run a self-contained Wenbo scheduling example with MockBackend.
 
 Example:
     python examples/quickstart.py
@@ -15,26 +15,26 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agentx.dag.model import DAGState
-from agentx.dag.registry import DAGRegistry
-from agentx.executor.mock_backend import MockBackend, MockMode
-from agentx.runtime.event import EventBus
-from agentx.runtime.state import DAGStateTracker
-from agentx.scheduler import Scheduler
-from agentx.scheduler.policy import (
+from wenbo.dag.model import DAGState
+from wenbo.dag.registry import DAGRegistry
+from wenbo.executor.mock_backend import MockBackend, MockMode
+from wenbo.runtime.event import EventBus
+from wenbo.runtime.state import DAGStateTracker
+from wenbo.scheduler import Scheduler
+from wenbo.scheduler.policy import (
     FairRoundRobinPolicy,
     FIFOPolicy,
     PriorityPolicy,
     ShortestJobFirstPolicy,
 )
-from agentx.workload.synthetic_loader import SyntheticDAGLoader
+from wenbo.workload.synthetic_loader import SyntheticDAGLoader
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("agentx-quickstart")
+logger = logging.getLogger("wenbo-quickstart")
 
 DEFAULT_DAG_FILE = Path(__file__).resolve().parent / "dags" / "quickstart.json"
 DEFAULT_OUTPUT_FILE = Path(".local") / "quickstart" / "result.json"
@@ -42,7 +42,7 @@ ALL_POLICIES = ["fifo", "priority", "fair_rr", "sjf"]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the AgentX quickstart with MockBackend")
+    parser = argparse.ArgumentParser(description="Run the Wenbo quickstart with MockBackend")
     parser.add_argument(
         "--dag-file",
         type=Path,
@@ -144,11 +144,13 @@ def summarize_timeline(timeline: list[dict[str, Any]], total_elapsed: float, max
 
 
 async def main_async(args: argparse.Namespace) -> None:
+    # 使用模拟后端运行示例，无需 API 密钥或下载模型。
     executor = MockBackend(
         mode=MockMode(args.mock_mode),
         base_latency_ms=args.base_latency_ms,
         random_range_ms=args.random_range_ms,
     )
+    # 组装事件总线、DAG 注册表和状态跟踪器，并交给调度器协调。
     event_bus = EventBus()
     registry = DAGRegistry()
     state_tracker = DAGStateTracker(event_bus, registry)
@@ -188,6 +190,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 len(dag.edges),
             )
 
+        # 等待所有 DAG 结束后，汇总节点状态、时间线和调度决策。
         await wait_all_dags(dags_with_spec, timeout_s=args.timeout_s)
         total_elapsed = time.monotonic() - total_start
         logger.info("All synthetic DAGs finished in %.3fs", total_elapsed)
@@ -221,12 +224,13 @@ async def main_async(args: argparse.Namespace) -> None:
             json.dump(output_data, f, ensure_ascii=False, indent=2)
         logger.info("Saved results to %s", output_path)
         print(
-            "AgentX quickstart finished: "
+            "Wenbo quickstart finished: "
             f"completed={output_data['metadata']['completed']}, "
             f"failed={output_data['metadata']['failed']}, "
             f"output={output_path}"
         )
     finally:
+        # 统一关闭调度器，确保异常退出时也能清理后台任务。
         await scheduler.stop()
 
 

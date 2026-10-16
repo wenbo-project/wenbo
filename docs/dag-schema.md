@@ -1,6 +1,6 @@
-# AgentX DAG IR Field Reference
+# Wenbo DAG IR Field Reference
 
-This document describes the DAG JSON shape accepted by AgentX workload loaders. A complete,
+This document describes the DAG JSON shape accepted by Wenbo workload loaders. A complete,
 runnable input is available at `examples/dags/quickstart.json`.
 
 ## 1. Top-Level Object

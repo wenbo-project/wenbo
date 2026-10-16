@@ -40,9 +40,6 @@ dist/
 /data/*.pdf
 /data/*.html
 
-# Small checked-in input used by the HotpotQA examples.
-!/data/hotpotqa_dags.json
-
 design/generated_dags.json
 design/generated_dags_no_layer.json
 design/dag_view.html
@@ -61,8 +58,8 @@ design/dag_view.html
 /scripts/
 /data/
 /ToolBench*/
-/src/agentx/config/
-/src/agentx/utils/
+/src/wenbo/config/
+/src/wenbo/utils/
 /docs/*
 !/docs/dag-schema.md
 /tests/*

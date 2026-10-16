@@ -3,13 +3,13 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentx"
+name = "wenbo"
 version = "0.1.0"
 description = "Event-driven multi-DAG scheduling for LLM workflows"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "AgentX Contributors" }]
+authors = [{ name = "Wenbo Contributors" }]
 keywords = ["agent", "dag", "llm", "scheduling", "workflow"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -24,7 +24,6 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-server = ["aiohttp>=3.9.0"]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
