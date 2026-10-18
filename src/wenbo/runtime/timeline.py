@@ -8,7 +8,6 @@ from typing import Any
 from wenbo.runtime.event import Event, EventType
 from wenbo.runtime.trace import SchedulingTrace, TraceEventType, TraceMode
 
-
 _EVENT_TYPE_MAP = {
     EventType.DAG_COMPLETED: TraceEventType.DAG_COMPLETED,
     EventType.DAG_FAILED: TraceEventType.DAG_FAILED,
@@ -23,6 +22,8 @@ _EVENT_TYPE_MAP = {
 
 
 class TimelineCollector:
+    """Collect execution milestones, ranked decisions, and full monotonic scheduling traces."""
+
     def __init__(self, policy_id: str | None = None) -> None:
         self._timeline: list[dict[str, Any]] = []
         self._decisions: list[dict[str, Any]] = []
@@ -41,6 +42,7 @@ class TimelineCollector:
         *,
         worker_id: str | None = None,
     ) -> None:
+        """Append a node milestone stamped with time.monotonic() seconds."""
         entry = {
             "dag_id": dag_id,
             "node_id": node_id,
@@ -52,6 +54,7 @@ class TimelineCollector:
         self._timeline.append(entry)
 
     def record_dag_arrived(self, dag_id: str, scheduling_round: int = 0) -> None:
+        """Record admission time for arrival-to-completion DAG latency statistics."""
         self._trace.record(
             TraceEventType.DAG_ARRIVED,
             time.monotonic(),
@@ -61,6 +64,7 @@ class TimelineCollector:
         )
 
     def record_event(self, event: Event, scheduling_round: int = 0) -> None:
+        """Map supported runtime lifecycle notifications to normalized trace events."""
         event_type = _EVENT_TYPE_MAP.get(event.event_type)
         if event_type is None or event.dag_id is None:
             return
@@ -70,9 +74,7 @@ class TimelineCollector:
             event.dag_id,
             node_id=event.node_id,
             resource_type=(
-                str(event.data["resource_type"])
-                if "resource_type" in event.data
-                else None
+                str(event.data["resource_type"]) if "resource_type" in event.data else None
             ),
             policy_id=self._policy_id,
             scheduling_round=scheduling_round,
@@ -90,6 +92,7 @@ class TimelineCollector:
         worker_id: str | None = None,
         policy_id: str | None = None,
     ) -> None:
+        """Record a resource acquisition/release; raise ValueError for other event types."""
         if event_type not in {
             TraceEventType.RESOURCE_ACQUIRED,
             TraceEventType.RESOURCE_RELEASED,
@@ -133,22 +136,25 @@ class TimelineCollector:
         decisions: list[Any],
         worker_assignments: dict[tuple[str, str], str] | None = None,
     ) -> None:
+        """Snapshot policy ranks and optional worker assignments using one monotonic timestamp."""
         recorded_at = time.monotonic()
         worker_assignments = worker_assignments or {}
         for rank, decision in enumerate(decisions):
             key = (decision.candidate.dag_id, decision.candidate.node_id)
-            self._decisions.append({
-                "time": recorded_at,
-                "rank": rank,
-                "dag_id": decision.candidate.dag_id,
-                "node_id": decision.candidate.node_id,
-                "policy_name": decision.policy_name,
-                "policy_version": decision.policy_version,
-                "policy_id": decision.policy_id,
-                "score": decision.score,
-                "reason": decision.reason,
-                **({"worker_id": worker_assignments[key]} if key in worker_assignments else {}),
-            })
+            self._decisions.append(
+                {
+                    "time": recorded_at,
+                    "rank": rank,
+                    "dag_id": decision.candidate.dag_id,
+                    "node_id": decision.candidate.node_id,
+                    "policy_name": decision.policy_name,
+                    "policy_version": decision.policy_version,
+                    "policy_id": decision.policy_id,
+                    "score": decision.score,
+                    "reason": decision.reason,
+                    **({"worker_id": worker_assignments[key]} if key in worker_assignments else {}),
+                }
+            )
 
     @property
     def timeline(self) -> list[dict[str, Any]]:

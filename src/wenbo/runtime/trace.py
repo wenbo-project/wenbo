@@ -10,10 +10,8 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import IO
-from typing import Any
+from typing import IO, Any
 from uuid import uuid4
-
 
 TRACE_STREAM_SCHEMA_VERSION = "wenbo.scheduling-trace.v1"
 
@@ -28,21 +26,23 @@ def _percentile(sorted_values: list[float], quantile: float) -> float | None:
     if lower == upper:
         return sorted_values[lower]
     fraction = position - lower
-    return (
-        sorted_values[lower] * (1.0 - fraction)
-        + sorted_values[upper] * fraction
-    )
+    return sorted_values[lower] * (1.0 - fraction) + sorted_values[upper] * fraction
 
 
 class TraceMode(str, Enum):
-    """Amount of trace data retained by a collector."""
+    """Trace retention mode: summary counts, full in-memory events, or JSONL stream.
+
+    All modes retain per-DAG completion timing for latency statistics.
+    Summary and stream modes do not retain individual event objects.
+    """
 
     SUMMARY = "summary"
     FULL = "full"
     STREAM = "stream"
 
     @classmethod
-    def parse(cls, value: "TraceMode | str") -> "TraceMode":
+    def parse(cls, value: TraceMode | str) -> TraceMode:
+        """Normalize a mode string or enum; raise ValueError for an unknown mode."""
         if isinstance(value, cls):
             return value
         try:
@@ -55,6 +55,8 @@ class TraceMode(str, Enum):
 
 
 class TraceEventType(str, Enum):
+    """Normalized lifecycle and resource event names shared by both execution engines."""
+
     DAG_ARRIVED = "dag.arrived"
     DAG_COMPLETED = "dag.completed"
     DAG_FAILED = "dag.failed"
@@ -71,6 +73,8 @@ class TraceEventType(str, Enum):
 
 @dataclass(frozen=True)
 class TraceEvent:
+    """Immutable event record; timestamp_s uses the clock named by clock."""
+
     sequence: int
     timestamp_s: float
     clock: str
@@ -85,10 +89,9 @@ class TraceEvent:
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the event, omitting None values and empty dictionaries."""
         return {
-            key: value
-            for key, value in asdict(self).items()
-            if value is not None and value != {}
+            key: value for key, value in asdict(self).items() if value is not None and value != {}
         }
 
 
@@ -106,9 +109,7 @@ class _JsonlTraceWriter:
     def __init__(self, path: str | Path, *, runner: str, clock: str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._temporary_path = self.path.with_name(
-            f".{self.path.name}.{uuid4().hex}.tmp"
-        )
+        self._temporary_path = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
         self._stream = self._temporary_path.open(
             "x",
             encoding="utf-8",
@@ -122,12 +123,14 @@ class _JsonlTraceWriter:
             self._temporary_path,
         )
         try:
-            self._write({
-                "record_type": "trace.header",
-                "schema_version": TRACE_STREAM_SCHEMA_VERSION,
-                "runner": runner,
-                "clock": clock,
-            })
+            self._write(
+                {
+                    "record_type": "trace.header",
+                    "schema_version": TRACE_STREAM_SCHEMA_VERSION,
+                    "runner": runner,
+                    "clock": clock,
+                }
+            )
         except Exception:
             self.abort()
             raise
@@ -145,14 +148,16 @@ class _JsonlTraceWriter:
         if self._finished:
             return
         try:
-            self._write({
-                "record_type": "trace.footer",
-                "schema_version": TRACE_STREAM_SCHEMA_VERSION,
-                "completed": True,
-                "event_count": summary["event_count"],
-                "last_sequence": summary["event_count"] - 1,
-                "summary": summary,
-            })
+            self._write(
+                {
+                    "record_type": "trace.footer",
+                    "schema_version": TRACE_STREAM_SCHEMA_VERSION,
+                    "completed": True,
+                    "event_count": summary["event_count"],
+                    "last_sequence": summary["event_count"] - 1,
+                    "summary": summary,
+                }
+            )
             self._stream.flush()
             os.fsync(self._stream.fileno())
             self._stream.close()
@@ -181,7 +186,19 @@ class _JsonlTraceWriter:
 
 
 class SchedulingTrace:
-    """Collect counts and optionally retain or stream individual events."""
+    """Collect normalized scheduling events and DAG completion latency statistics.
+
+    Args:
+        runner: Execution engine or method label included in every event.
+        clock: Clock label, normally monotonic for runtime or virtual for simulation.
+        mode: summary, full, or stream retention mode.
+        stream_path: Required only for stream mode. A temporary JSONL file
+            is atomically promoted to this path by a successful close.
+
+    Events must be recorded in nondecreasing timestamp order. Timestamps
+    and completion latencies use seconds. Retain consistent units and a
+    single clock within a trace.
+    """
 
     def __init__(
         self,
@@ -233,20 +250,19 @@ class SchedulingTrace:
         worker_id: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
+        """Record an event and update counts and DAG latency statistics.
+
+        Raises:
+            RuntimeError: The collector is already closed.
+            ValueError: The timestamp is nonfinite or precedes the previous event.
+        """
         if self._closed:
             raise RuntimeError("trace is already closed")
-        event_name = (
-            event_type.value
-            if isinstance(event_type, TraceEventType)
-            else str(event_type)
-        )
+        event_name = event_type.value if isinstance(event_type, TraceEventType) else str(event_type)
         timestamp = float(timestamp_s)
         if not math.isfinite(timestamp):
             raise ValueError("trace timestamp must be finite")
-        if (
-            self._last_timestamp_s is not None
-            and timestamp < self._last_timestamp_s
-        ):
+        if self._last_timestamp_s is not None and timestamp < self._last_timestamp_s:
             raise ValueError("trace timestamps must be monotonically non-decreasing")
         sequence = self._event_count
         self._event_count += 1
@@ -292,6 +308,7 @@ class SchedulingTrace:
             raise
 
     def close(self) -> None:
+        """Finalize the trace and publish a completed JSONL stream; repeated calls are a no-op."""
         if self._closed:
             return
         if self._stream_writer is not None:
@@ -304,6 +321,7 @@ class SchedulingTrace:
         self._closed = True
 
     def abort(self) -> None:
+        """Close the collector and discard an incomplete stream temporary file."""
         if self._closed:
             return
         if self._stream_writer is not None:
@@ -312,19 +330,17 @@ class SchedulingTrace:
 
     @property
     def events(self) -> list[dict[str, Any]]:
+        """Return serialized retained events; empty in summary and stream modes."""
         return [event.to_dict() for event in self._events]
 
     @property
     def summary(self) -> dict[str, Any]:
-        return self._summary(
-            stream_completed=(
-                self.mode is TraceMode.STREAM and self._closed
-            )
-        )
+        """Return counts, time bounds, and matched arrival-to-completion latency percentiles."""
+        return self._summary(stream_completed=(self.mode is TraceMode.STREAM and self._closed))
 
     @property
     def dag_completion_times(self) -> list[float]:
-        """Absolute virtual completion times in deterministic event order."""
+        """Return absolute completion timestamps in event order using this trace's clock."""
         return list(self._dag_completion_timestamps)
 
     def _summary(self, *, stream_completed: bool) -> dict[str, Any]:
@@ -339,20 +355,20 @@ class SchedulingTrace:
             "event_counts": dict(sorted(self._counts.items())),
             "dag_completion_latency_count": len(dag_latencies),
             "dag_completion_latency_mean_s": (
-                sum(dag_latencies) / len(dag_latencies)
-                if dag_latencies
-                else None
+                sum(dag_latencies) / len(dag_latencies) if dag_latencies else None
             ),
             "dag_completion_latency_p50_s": _percentile(dag_latencies, 0.50),
             "dag_completion_latency_p95_s": _percentile(dag_latencies, 0.95),
             "dag_completion_latency_p99_s": _percentile(dag_latencies, 0.99),
         }
         if self._stream_writer is not None:
-            summary.update({
-                "stream_path": str(self._stream_writer.path),
-                "stream_schema_version": TRACE_STREAM_SCHEMA_VERSION,
-                "stream_completed": stream_completed,
-            })
+            summary.update(
+                {
+                    "stream_path": str(self._stream_writer.path),
+                    "stream_schema_version": TRACE_STREAM_SCHEMA_VERSION,
+                    "stream_completed": stream_completed,
+                }
+            )
         return summary
 
 

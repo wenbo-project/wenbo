@@ -7,8 +7,14 @@ from abc import ABC, abstractmethod
 from wenbo.scheduler.types import SchedulingCandidate, SchedulingDecision
 
 
-# 策略只负责从候选节点中选择执行顺序，资源分配由 Scheduler 完成。
+# Policies order candidate nodes; Scheduler handles resource allocation.
 class SchedulingPolicy(ABC):
+    """Order eligible nodes without reserving workers or mutating graph state.
+
+    Custom policies implement select and provide a stable name/version
+    so decisions can be identified in recorded traces.
+    """
+
     name = "unknown"
     version = "1"
 
@@ -22,18 +28,28 @@ class SchedulingPolicy(ABC):
         candidates: list[SchedulingCandidate],
         available_slots: int,
     ) -> list[SchedulingDecision]:
-        """Select scheduling decisions from candidate nodes."""
+        """Return ordered decisions for at most available_slots candidates.
+
+        Args:
+            candidates: Eligible nodes in ready-queue order.
+            available_slots: Nonnegative dispatch budget supplied by Scheduler.
+
+        Returns:
+            Decisions referring to input candidates; placement follows selection.
+        """
 
     def select_nodes(
         self,
         candidates: list[SchedulingCandidate],
         available_slots: int,
     ) -> list[SchedulingCandidate]:
-        """Backward-compatible candidate selection helper."""
+        """Select candidate nodes without scheduling decision metadata."""
         return [decision.candidate for decision in self.select(candidates, available_slots)]
 
 
 class FIFOPolicy(SchedulingPolicy):
+    """Select candidates in the ready-queue order supplied by the scheduler."""
+
     name = "fifo"
 
     def select(
@@ -55,6 +71,8 @@ class FIFOPolicy(SchedulingPolicy):
 
 
 class ShortestJobFirstPolicy(SchedulingPolicy):
+    """Prefer smaller positive token estimates; place missing or nonpositive estimates last."""
+
     name = "sjf"
 
     def select(
@@ -73,7 +91,9 @@ class ShortestJobFirstPolicy(SchedulingPolicy):
         return [
             SchedulingDecision(
                 candidate=candidate,
-                score=float(-(candidate.estimated_tokens if candidate.estimated_tokens > 0 else 10**9)),
+                score=float(
+                    -(candidate.estimated_tokens if candidate.estimated_tokens > 0 else 10**9)
+                ),
                 policy_name=self.name,
                 reason="smaller estimated token cost",
                 policy_version=self.version,
@@ -83,6 +103,8 @@ class ShortestJobFirstPolicy(SchedulingPolicy):
 
 
 class PriorityPolicy(SchedulingPolicy):
+    """Prefer higher DAG priority, then node priority, then earlier ready order."""
+
     name = "priority"
 
     def select(
@@ -108,6 +130,12 @@ class PriorityPolicy(SchedulingPolicy):
 
 
 class FairRoundRobinPolicy(SchedulingPolicy):
+    """Interleave DAGs in their first-appearance order within each select call.
+
+    No round-robin cursor is retained between calls; this policy does
+    not guarantee fairness across scheduling rounds.
+    """
+
     name = "fair_rr"
 
     def select(
@@ -153,6 +181,8 @@ class FairRoundRobinPolicy(SchedulingPolicy):
 
 
 class FairShortestJobFirstPolicy(SchedulingPolicy):
+    """Interleave DAGs per select call, sorting each DAG by positive token estimate."""
+
     name = "fair_sjf"
 
     def select(
@@ -219,7 +249,11 @@ POLICY_TYPES: dict[str, type[SchedulingPolicy]] = {
 
 
 def build_policy(name: str) -> SchedulingPolicy:
-    """Build a configured policy and reject unknown names explicitly."""
+    """Construct a built-in policy from a case-insensitive name.
+
+    Supported names are fifo, sjf, priority, fair_rr, and fair_sjf.
+    Whitespace is stripped. Unknown names raise ValueError.
+    """
     normalized = str(name).strip().lower()
     try:
         return POLICY_TYPES[normalized]()

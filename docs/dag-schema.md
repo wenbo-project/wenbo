@@ -1,174 +1,116 @@
-# Wenbo DAG IR Field Reference
+# DAG JSON Field Reference
 
-This document describes the DAG JSON shape accepted by Wenbo workload loaders. A complete,
-runnable input is available at `examples/dags/quickstart.json`.
+This page describes the runtime input format accepted by `wenbo.workload.synthetic_loader.SyntheticDAGLoader`. Loaders in the external benchmark repository handle shard indexes and separate resource files for frozen paper datasets; see [Real Dataset Experiments](experiments/real-datasets.md).
 
-## 1. Top-Level Object
+The tables distinguish loader requirements from usage recommendations. They are not a standalone JSON Schema validation configuration.
 
-```json
-{
-  "dags": []
-}
-```
+## Top-level structure
 
-| Field | Required | Type | Description |
-| --- | --- | --- | --- |
-| `dags` | yes | array | List of generated DAG objects. |
-
-## 2. dags[]
-
-Each element in `dags[]` represents one directed acyclic graph.
+The loader accepts either an array of DAGs or an object containing a `dags` array:
 
 ```json
-{
-  "dag_id": "dag_000001",
-  "dag_type": "reasoning",
-  "estimated_cost": {
-    "total_tokens": 1408,
-    "total_cpu_time_ms": 20,
-    "total_data_volume_bytes": 8192
-  },
-  "nodes": [],
-  "edges": []
-}
+{"dags": []}
 ```
 
-| Field | Required | Type | Description | Allowed Values |
-| --- | --- | --- | --- | --- |
-| `dag_id` | yes | string | Unique DAG identifier within the dataset. | - |
-| `dag_type` | yes | string | DAG task category. | `reasoning`, `qa`, `tool`, `retrieval` |
-| `estimated_cost` | yes | object | DAG-level aggregate workload estimate. | - |
-| `nodes` | yes | array | Executable nodes. Edges reference nodes by `node_id`. | - |
-| `edges` | yes | array | Directed dependency edges. | - |
+Other top-level structures raise `ValueError`. The loader can return an empty list, but Director rejects individual DAGs with no nodes. Inputs intended for execution should contain at least one nonempty graph.
 
-## 3. estimated_cost
+## DAG objects
 
-`estimated_cost` records aggregate workload estimates for the full DAG.
+| Field | Required | Default / meaning |
+| --- | --- | --- |
+| `dag_id` | Yes | DAG identifier; must be unique within the target Registry |
+| `dag_type` | No | `synthetic`; classification metadata, not restricted to a fixed set of strings |
+| `topology` | No | `custom`; topology classification metadata |
+| `nodes` | No | `[]`; node list; execution requires at least one node |
+| `edges` | No | `[]`; directed dependency list |
+| `estimated_cost` | No | `{}`; aggregate graph estimates; does not override node costs |
+| `graph_stats` | No | Node, edge, root, and leaf counts are computed when missing or empty |
+| `metadata` | No | `{}`; `priority` becomes the graph priority, defaulting to `1` |
 
-```json
-{
-  "total_tokens": 1408,
-  "total_cpu_time_ms": 20,
-  "total_data_volume_bytes": 8192
-}
-```
+Graph-level `estimated_cost` may record `total_tokens`, `total_cpu_time_ms`, and `total_data_volume_bytes`. These keys are optional, and the loader does not automatically check that they match the sums over nodes.
 
-| Field | Required | Type | Description |
-| --- | --- | --- | --- |
-| `total_tokens` | yes | number | Sum of token estimates across GPU nodes. CPU nodes without `tokens` contribute 0. |
-| `total_cpu_time_ms` | yes | number | Sum of `cpu.time_ms` estimates across CPU nodes. GPU nodes without `cpu` contribute 0. |
-| `total_data_volume_bytes` | yes | number | Sum of `data_volume_bytes` across all edges. |
+## Node objects
 
-## 4. nodes[]
+| Field | Required | Default / meaning |
+| --- | --- | --- |
+| `node_id` | Yes | Unique identifier within the graph |
+| `node_type` | No | `custom`; runtime semantic type or compatible CPU/GPU label |
+| `hardware` | No | Explicit value takes precedence; otherwise inferred from the CPU/GPU type, falling back to `any` |
+| `prompt` | No | A prompt requesting a short placeholder response |
+| `tokens` | No | Structured token estimate, such as `{"tokens": 512}` |
+| `estimated_tokens` | No | Used when no higher-precedence token field is provided; defaults to `0` |
+| `cpu` | No | Explicit duration in milliseconds, such as `{"time_ms": 20}` |
+| `estimated_cost` | No | `{}`; supports estimates such as `tokens`, `latency_ms`, and `memory_mb` |
+| `resource_requirement` | No | Resource requirements object; see below |
+| `layer` | No | Visualization layer number stored in node metadata |
+| `metadata` | No | `{}`; caller-supplied information |
 
-Each node represents one independently schedulable execution step.
+Runtime semantic types include `llm_infer`, `tool_call`, `retrieval`, `aggregate`, `condition`, `backtrack`, and `custom`. Unrecognized types map to `NodeType.CUSTOM`. `CPU` / `GPU` are compatibility labels: they become `cpu` / `gpu` when hardware is not explicitly specified, while the runtime node type is CUSTOM.
 
-GPU node:
+Explicit `hardware` values are stripped of surrounding whitespace and converted to lowercase. `layer` is metadata only: the loader does not require edges to connect lower layers to higher layers. Cycle detection uses actual dependencies. Node type names do not imply integration with real tools or model services.
 
-```json
-{
-  "node_id": "N_0_0",
-  "node_type": "GPU",
-  "layer": 0,
-  "tokens": {
-    "tokens": 512
-  }
-}
-```
+### Estimate precedence
 
-CPU node:
+| Runtime field | Sources, from highest to lowest precedence |
+| --- | --- |
+| `estimated_tokens` | `tokens.tokens` → `estimated_cost.tokens` → `estimated_tokens` → `0` |
+| `resource_requirement.estimated_time_ms` | `cpu.time_ms` → `resource_requirement.estimated_time_ms` → `estimated_cost.latency_ms` → `0` |
+| `resource_requirement.memory_mb` | `resource_requirement.memory_mb` → `estimated_cost.memory_mb` → `0` |
+| `resource_requirement.estimated_gpu_memory_mb` | Field of the same name → `resource_requirement.gpu_memory_mb` → `0` |
 
-```json
-{
-  "node_id": "N_1_0",
-  "node_type": "CPU",
-  "layer": 1,
-  "cpu": {
-    "time_ms": 20
-  }
-}
-```
+If a higher-precedence field is present but zero, the loader does not search lower-precedence fields for a positive value. Use values convertible to numbers; all estimates should be nonnegative. Director checks for negative values at submission.
 
-| Field | Required | Type | Description | Allowed Values |
-| --- | --- | --- | --- | --- |
-| `node_id` | yes | string | Unique node identifier within the parent DAG. | - |
-| `node_type` | yes | string | Execution resource class used by the generator, visualizer, and scheduler-facing examples. | `GPU`, `CPU` |
-| `layer` | yes | integer | Topological layer used by the generator and visualizer. Edges must point from lower layers to higher layers. | `>= 0` |
-| `tokens` | no | object | Token estimate. Emitted for GPU nodes by the current generator. | - |
-| `cpu` | no | object | CPU runtime estimate. Emitted for CPU nodes by the current generator. | - |
+### Resource requirements
 
-The current template does not use a separate `hardware` field. Resource class is represented directly by `node_type`.
+| Field | Default | Unit / meaning |
+| --- | --- | --- |
+| `cpu_cores` | `0` | CPU core count |
+| `gpu_count` | `1` for GPU-labeled nodes; `0` otherwise | Required GPU count |
+| `memory_mb` | `0` | Memory in MB |
+| `gpu_memory_mb` | `0` | GPU memory in MB |
+| `estimated_gpu_memory_mb` | See above | Estimated GPU memory in MB |
+| `estimated_compute_flops` | `0` | Floating-point operation count |
+| `estimated_time_ms` | See above | Estimated execution duration in milliseconds |
 
-## 5. tokens
+These fields describe requirements and estimates, not allocated physical resources. See [Execution](user-guide/execution.md) for the constraints currently enforced by worker matching.
 
-```json
-{
-  "tokens": 512
-}
-```
+## Edge objects
 
-| Field | Required | Type | Description |
-| --- | --- | --- | --- |
-| `tokens` | yes, when the object exists | number | Estimated token count for one GPU node. |
+| Field | Required | Default / meaning |
+| --- | --- | --- |
+| `source` | Yes | ID of an upstream node defined in the same graph |
+| `target` | Yes | ID of a downstream node defined in the same graph |
+| `edge_id` | No | Generated as `e_{source}_{target}` |
+| `dependency_type` | No | `control`; dependency category metadata |
+| `data_volume_bytes` | No | `0`; estimated transfer size in bytes |
+| `data_mapping` | No | `{}`; currently not interpreted by PromptResolver |
+| `metadata` | No | `{}`; additional edge metadata |
 
-## 6. cpu
+Endpoints must exist, and self-loops are rejected. Builder ignores repeated additions with the same edge ID and endpoints; reusing an ID with different endpoints fails. Edges with different IDs but identical endpoints are not uniformly rejected as duplicates by this loader. To avoid ambiguity, describe each endpoint pair once and use unique edge IDs.
 
-```json
-{
-  "time_ms": 20
-}
-```
+The loader adds all nodes before connecting edges and checking for cycles, so JSON nodes need not appear in predecessor-first order. In contrast, Python `DAGBuilder.add_node(dependencies=...)` requires the specified predecessors to exist already.
 
-| Field | Required | Type | Description |
-| --- | --- | --- | --- |
-| `time_ms` | yes, when the object exists | number | Estimated runtime for one CPU node, measured in milliseconds. |
-
-## 7. edges[]
-
-Each edge represents one directed dependency from `source` to `target`.
-
-```json
-{
-  "edge_id": "E0",
-  "source": "N_0_0",
-  "target": "N_1_0",
-  "data_volume_bytes": 2048
-}
-```
-
-| Field | Required | Type | Description |
-| --- | --- | --- | --- |
-| `edge_id` | yes | string | Unique edge identifier within the parent DAG. |
-| `source` | yes | string | Upstream node id. It must exist in the same DAG. |
-| `target` | yes | string | Downstream node id. It must exist in the same DAG. |
-| `data_volume_bytes` | yes | number | Estimated data transferred along this edge, measured in bytes. |
-
-Edges must not be self-loops, duplicate the same `source -> target` pair, or point from the same/higher layer to a lower layer.
-
-## 8. Minimal Valid Dataset
+## Minimal runnable input
 
 ```json
 {
   "dags": [
     {
-      "dag_id": "dag_000001",
-      "dag_type": "reasoning",
-      "estimated_cost": {
-        "total_tokens": 512,
-        "total_cpu_time_ms": 0,
-        "total_data_volume_bytes": 0
-      },
+      "dag_id": "example",
       "nodes": [
-        {
-          "node_id": "N_0_0",
-          "node_type": "GPU",
-          "layer": 0,
-          "tokens": {
-            "tokens": 512
-          }
-        }
+        {"node_id": "first", "node_type": "GPU", "tokens": {"tokens": 512}},
+        {"node_id": "second", "node_type": "CPU", "cpu": {"time_ms": 20}}
       ],
-      "edges": []
+      "edges": [
+        {"source": "first", "target": "second"}
+      ]
     }
   ]
 }
+```
+
+Save the example as `workflow.json`, load it with `SyntheticDAGLoader.load_from_file()`, and execute it through a Scheduler configured with an execution backend. See the [separate benchmark](experiments/real-datasets.md) for paper experiments using virtual time.
+
+## Validation scope
+
+Loading validates JSON structure, identifiers, endpoints, self-loops, cycles, and dependency reference consistency. Admission additionally checks for nonempty graphs, supported versions, nonnegative resource estimates, and retry parameters. The external benchmark entry point validates manifest hashes, shard counts, and total work for frozen inputs; SyntheticDAGLoader does not perform these checks.

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any, Optional
+from typing import Any
 
 from wenbo.executor.base import ExecutorBackend, LLMRequest
 from wenbo.executor.worker import WorkerLease
@@ -15,7 +15,7 @@ from wenbo.runtime.timeline import TimelineCollector
 
 logger = logging.getLogger(__name__)
 
-FinishCallback = Callable[[str, str, Optional[str], Optional[str]], Awaitable[None]]
+FinishCallback = Callable[[str, str, str | None, str | None], Awaitable[None]]
 
 
 def _strip_reasoning(text: str) -> str:
@@ -83,18 +83,22 @@ def build_node_request_metadata(
     node: Any,
     dag: Any = None,
     *,
-    worker_id: Optional[str] = None,
-    worker_hardware: Optional[str] = None,
+    worker_id: str | None = None,
+    worker_hardware: str | None = None,
     attempt: int = 0,
-    lease_id: Optional[str] = None,
+    lease_id: str | None = None,
 ) -> dict:
+    """Collect graph, resource, worker, attempt, and lease metadata for a request.
+
+    Transfer sizes are in bytes; resource estimates keep their ResourceReq
+    units. Incoming size comes from node metadata, or is derived from
+    incoming graph edges when that metadata is absent.
+    """
     resource = node.resource_requirement
     incoming_data_volume_bytes = node.metadata.get("incoming_data_volume_bytes")
     if incoming_data_volume_bytes is None and dag is not None:
         incoming_data_volume_bytes = sum(
-            edge.data_volume_bytes
-            for edge in dag.edges.values()
-            if edge.target == node_id
+            edge.data_volume_bytes for edge in dag.edges.values() if edge.target == node_id
         )
     incoming_data_volume_bytes = int(incoming_data_volume_bytes or 0)
 
@@ -121,6 +125,13 @@ def build_node_request_metadata(
 
 
 class ExecutionCoordinator:
+    """Manage local async execution tasks and report results to the state tracker.
+
+    node_timeout is the backend wait limit in seconds. on_finished is
+    awaited to notify the scheduler after each execution task releases
+    its local bookkeeping. A worker lease can override the default backend.
+    """
+
     def __init__(
         self,
         registry: Any,
@@ -131,7 +142,11 @@ class ExecutionCoordinator:
         node_timeout: float,
         on_finished: FinishCallback,
         permissive_output: bool = False,
+        output_mode: str = "raw",
     ) -> None:
+        if output_mode not in {"raw", "short_answer"}:
+            raise ValueError("output_mode must be raw or short_answer")
+        self._output_mode = output_mode
         self._registry = registry
         self._state_tracker = state_tracker
         self._executor = executor
@@ -141,10 +156,13 @@ class ExecutionCoordinator:
         self._on_finished = on_finished
         self._permissive_output = permissive_output
         self._tasks: set[asyncio.Task] = set()
+        self._finalizers: set[asyncio.Task] = set()
+        self._cleanup_tasks: dict[asyncio.Task, asyncio.Task] = {}
         self._active_requests: dict[asyncio.Task, tuple[ExecutorBackend, str]] = {}
         self._task_metadata: dict[asyncio.Task, tuple[str, str]] = {}
 
-    async def start(self, candidate: Any, worker: Optional[WorkerLease] = None) -> bool:
+    async def start(self, candidate: Any, worker: WorkerLease | None = None) -> bool:
+        """Start a background execution task; return False if the graph or READY node is unavailable."""
         dag = self._registry.get(candidate.dag_id)
         if dag is None:
             return False
@@ -152,12 +170,6 @@ class ExecutionCoordinator:
         worker_id = worker.worker_id if worker is not None else None
         attempt = worker.attempt if worker is not None else max(candidate.node.attempt + 1, 1)
         lease_id = worker.lease_id if worker is not None else None
-        self._timeline_collector.record(
-            candidate.dag_id,
-            candidate.node_id,
-            "started",
-            worker_id=worker_id,
-        )
         started = await self._state_tracker.on_node_started(
             dag,
             candidate.node_id,
@@ -167,14 +179,27 @@ class ExecutionCoordinator:
         )
         if started is False:
             return False
+        self._timeline_collector.record(
+            candidate.dag_id,
+            candidate.node_id,
+            "started",
+            worker_id=worker_id,
+        )
         task = asyncio.create_task(self._execute(candidate, worker))
         self._tasks.add(task)
         self._task_metadata[task] = (candidate.dag_id, candidate.node_id)
-        task.add_done_callback(self._tasks.discard)
-        task.add_done_callback(self._task_metadata.pop)
+
+        def done(execution: asyncio.Task) -> None:
+            finalizer = asyncio.create_task(self._finish(execution, candidate, worker))
+            self._finalizers.add(finalizer)
+            self._cleanup_tasks[execution] = finalizer
+            finalizer.add_done_callback(self._finalizers.discard)
+
+        task.add_done_callback(done)
         return True
 
     async def close(self, cancel: bool = True) -> None:
+        """Await active tasks, requesting backend and task cancellation when cancel is True."""
         if not self._tasks:
             return
         tasks = list(self._tasks)
@@ -187,6 +212,9 @@ class ExecutionCoordinator:
             for task in tasks:
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        finalizers = [t for t in self._finalizers if t is not asyncio.current_task()]
+        if finalizers:
+            await asyncio.gather(*finalizers)
 
     async def cancel_dag(self, dag_id: str, *, wait: bool = True) -> None:
         """Cancel execution tasks belonging to one DAG and its backend calls."""
@@ -194,8 +222,7 @@ class ExecutionCoordinator:
         tasks = [
             task
             for task in list(self._tasks)
-            if self._task_metadata.get(task, (None, None))[0] == dag_id
-            and task is not current_task
+            if self._task_metadata.get(task, (None, None))[0] == dag_id and task is not current_task
         ]
         if not tasks:
             return
@@ -207,20 +234,28 @@ class ExecutionCoordinator:
                     await executor.cancel(request_id)
                 except Exception:
                     logger.exception("Failed to cancel executor request %s", request_id)
-            task.cancel()
+            if not task.done():
+                task.cancel()
         if wait:
             await asyncio.gather(*tasks, return_exceptions=True)
+            finalizers = [
+                self._cleanup_tasks[t]
+                for t in tasks
+                if t in self._cleanup_tasks and self._cleanup_tasks[t] is not current_task
+            ]
+            if finalizers:
+                await asyncio.gather(*finalizers)
 
-    async def _execute(self, candidate: Any, worker: Optional[WorkerLease] = None) -> None:
+    async def _execute(self, candidate: Any, worker: WorkerLease | None = None) -> None:
         dag_id = candidate.dag_id
         node_id = candidate.node_id
         node = candidate.node
         task = asyncio.current_task()
         request_id = ""
-        attempt = worker.attempt if worker is not None else max(node.attempt + 1, 1)
+        attempt = worker.attempt if worker is not None else node.attempt
         lease_id = worker.lease_id if worker is not None else None
         try:
-            # 执行前解析上游输出，再通过分配到的后端提交请求。
+            # Resolve upstream outputs before submitting the request through the assigned backend.
             prompt = self._prompt_resolver.resolve(dag_id, node)
             executor = worker.backend if worker is not None else self._executor
             dag = self._registry.get(dag_id)
@@ -252,12 +287,16 @@ class ExecutionCoordinator:
                 return
 
             if response.success:
-                sanitized_output = _sanitize_output(prompt, response.output)
+                sanitized_output = (
+                    _sanitize_output(prompt, response.output)
+                    if self._output_mode == "short_answer"
+                    else response.output
+                )
                 final_output = sanitized_output
                 if self._permissive_output and not final_output:
                     final_output = _fallback_output(response.output)
 
-                if final_output:
+                if self._output_mode == "raw" or final_output:
                     await self._state_tracker.on_node_completed(
                         dag,
                         node_id,
@@ -325,19 +364,42 @@ class ExecutionCoordinator:
             if task is not None:
                 self._active_requests.pop(task, None)
             node.request_id = None
-            self._timeline_collector.record(
-                dag_id,
-                node_id,
-                "finished",
-                worker_id=worker.worker_id if worker is not None else None,
-            )
-            # 无论成功、失败还是取消，都通知调度器释放资源并继续调度。
-            await self._on_finished(
-                dag_id,
-                node_id,
-                worker.worker_id if worker is not None else None,
-                worker.lease_id if worker is not None else None,
-            )
+
+    async def _finish(self, task: asyncio.Task, candidate: Any, worker: WorkerLease | None) -> None:
+        # A done callback runs even if cancellation prevented coroutine entry.
+        dag_id, node_id = candidate.dag_id, candidate.node_id
+        try:
+            if task.cancelled():
+                dag = self._registry.get(dag_id)
+                if dag is not None:
+                    await self._state_tracker.on_node_cancelled(
+                        dag,
+                        node_id,
+                        "execution cancelled",
+                        attempt=worker.attempt if worker is not None else candidate.node.attempt,
+                        lease_id=worker.lease_id if worker is not None else None,
+                    )
+        finally:
+            self._active_requests.pop(task, None)
+            candidate.node.request_id = None
+            try:
+                self._timeline_collector.record(
+                    dag_id,
+                    node_id,
+                    "finished",
+                    worker_id=worker.worker_id if worker is not None else None,
+                )
+                # Notify the scheduler on success, failure, or cancellation to release resources and resume scheduling.
+                await self._on_finished(
+                    dag_id,
+                    node_id,
+                    worker.worker_id if worker is not None else None,
+                    worker.lease_id if worker is not None else None,
+                )
+            finally:
+                self._cleanup_tasks.pop(task, None)
+                self._tasks.discard(task)
+                self._task_metadata.pop(task, None)
 
 
 __all__ = [

@@ -1,4 +1,4 @@
-"""Flat runtime API compatibility layer."""
+"""Public runtime event, state, timeline, and trace exports."""
 
 from wenbo.runtime.event import Event, EventBus, EventType
 from wenbo.runtime.state import DAGStateTracker, RuntimeStateMachine

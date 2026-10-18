@@ -1,7 +1,7 @@
 SPHINXOPTS    ?= -W --keep-going
-SPHINXBUILD   ?= sphinx-build
-SOURCEDIR     = source
-BUILDDIR      = build
+SPHINXBUILD   ?= python -m sphinx
+SOURCEDIR     = .
+BUILDDIR      = ../.local/docs-build
 
 help:
 	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)

@@ -1,12 +1,7 @@
 target-version = "py310"
 line-length = 100
 
-extend-exclude = [
-    "design/generated_dags*.json",
-    "archive",
-]
-
-
+extend-exclude = [".local"]
 
 [lint]
 select = [

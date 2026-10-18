@@ -1,8 +1,8 @@
 """Loader for synthetic DAG IR datasets.
 
-This loader accepts the JSON shape produced by ``design/run.py`` and converts it
-to Wenbo runtime ``DynamicDAG`` objects without using prompt text for cost
-estimation.
+This loader accepts the JSON shape documented in ``docs/dag-schema.md`` and
+converts it to Wenbo runtime ``DynamicDAG`` objects without using prompt text
+for cost estimation.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from wenbo.dag.builder import DAGBuilder
 from wenbo.dag.model import DynamicDAG, ModelConfig, NodeType, ResourceReq
@@ -18,6 +18,8 @@ from wenbo.dag.model import DynamicDAG, ModelConfig, NodeType, ResourceReq
 
 @dataclass
 class SyntheticDAGSpec:
+    """Input graph specification retained alongside the runtime graph for reporting."""
+
     dag_id: str
     dag_type: str = "synthetic"
     topology: str = "custom"
@@ -29,7 +31,7 @@ class SyntheticDAGSpec:
 
 
 def _load_json(file_path: str | Path) -> list[dict[str, Any]]:
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, encoding="utf-8") as f:
         data = json.load(f)
 
     if isinstance(data, list):
@@ -40,6 +42,7 @@ def _load_json(file_path: str | Path) -> list[dict[str, Any]]:
 
 
 def parse_synthetic_specs(raw_list: list[dict[str, Any]]) -> list[SyntheticDAGSpec]:
+    """Parse graph mappings, applying defaults and deriving absent graph statistics."""
     specs = []
     for item in raw_list:
         specs.append(
@@ -58,12 +61,18 @@ def parse_synthetic_specs(raw_list: list[dict[str, Any]]) -> list[SyntheticDAGSp
 
 
 class SyntheticDAGLoader:
-    """Convert synthetic DAG JSON into executable Wenbo DAG objects."""
+    """Convert one JSON workload into runtime DynamicDAG/specification pairs.
+
+    Accepts a list of graph mappings or an object containing a dags list.
+    Model defaults are copied into each graph's node configuration. Frozen
+    shard indexes and separate resource files are handled by the independent
+    benchmark repository, not by this runtime loader.
+    """
 
     def __init__(
         self,
         default_model: str = "synthetic-model",
-        default_sampling_params: Optional[dict] = None,
+        default_sampling_params: dict | None = None,
     ) -> None:
         self._default_model = default_model
         self._default_sampling_params = default_sampling_params or {
@@ -75,14 +84,29 @@ class SyntheticDAGLoader:
     def load_from_file(
         self,
         file_path: str | Path,
-        limit: Optional[int] = None,
+        limit: int | None = None,
     ) -> list[tuple[DynamicDAG, SyntheticDAGSpec]]:
+        """Load and structurally validate graphs from a UTF-8 JSON file.
+
+        Args:
+            file_path: JSON array or object containing a dags array.
+            limit: Optional prefix length; use a positive integer or None.
+                The current implementation treats zero like no limit.
+
+        Returns:
+            Pairs of runtime graph and source specification in input order.
+
+        Raises:
+            ValueError: The JSON shape or node/edge references are invalid.
+            ValidationError: A graph contains a cycle or inconsistent dependencies.
+            KeyError: A required identifier or edge endpoint is absent.
+        """
         raw_list = _load_json(file_path)
         specs = parse_synthetic_specs(raw_list)
         if limit:
             specs = specs[:limit]
 
-        # 将 JSON 描述转换为运行时 DAG，保留原始规格供结果汇总使用。
+        # Convert JSON specifications to runtime DAGs and retain the originals for result summaries.
         builder = DAGBuilder()
         return [(self._build_dag(builder, spec), spec) for spec in specs]
 
@@ -185,7 +209,9 @@ def _build_resource_requirement(node_def: dict[str, Any], hardware: str) -> Reso
         gpu_count=int(raw.get("gpu_count", 1 if hardware == "gpu" else 0) or 0),
         memory_mb=float(raw.get("memory_mb", estimated_cost.get("memory_mb", 0.0)) or 0.0),
         gpu_memory_mb=float(raw.get("gpu_memory_mb", 0.0) or 0.0),
-        estimated_gpu_memory_mb=float(raw.get("estimated_gpu_memory_mb", raw.get("gpu_memory_mb", 0.0)) or 0.0),
+        estimated_gpu_memory_mb=float(
+            raw.get("estimated_gpu_memory_mb", raw.get("gpu_memory_mb", 0.0)) or 0.0
+        ),
         estimated_compute_flops=float(raw.get("estimated_compute_flops", 0.0) or 0.0),
         estimated_time_ms=float(estimated_time_ms or 0.0),
     )

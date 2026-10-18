@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from wenbo.dag.model import DynamicDAG
 
 
 class ValidationError(Exception):
+    """Invalid graph or admission request rejected by a builder or Director."""
+
     pass
 
 
 class DAGValidator:
+    """Check acyclicity and consistency of graph dependency references."""
+
     @staticmethod
-    def validate(dag: DynamicDAG) -> Optional[str]:
+    def validate(dag: DynamicDAG) -> str | None:
+        """Return the first structural error message, or None for a valid graph.
+
+        Unlike DAGBuilder.validate, this method reports errors as strings.
+        Resource limits and execution estimates are checked by Director.
+        """
         error = DAGValidator._check_acyclic(dag)
         if error:
             return error
@@ -23,36 +30,32 @@ class DAGValidator:
         return None
 
     @staticmethod
-    def _check_acyclic(dag: DynamicDAG) -> Optional[str]:
-        # 三色标记区分未访问、访问中和已完成；回到访问中节点即存在环。
+    def _check_acyclic(dag: DynamicDAG) -> str | None:
+        # Three colors track unvisited, active, and finished nodes; revisiting an active node reveals a cycle.
         white, gray, black = 0, 1, 2
         color: dict[str, int] = {node_id: white for node_id in dag.nodes}
 
-        def dfs(node_id: str) -> Optional[str]:
-            color[node_id] = gray
-            node = dag.nodes.get(node_id)
-            if node:
-                for succ_id in node.successors:
-                    if succ_id not in color:
-                        continue
-                    if color[succ_id] == gray:
-                        return f"Cycle detected: {node_id} -> {succ_id}"
-                    if color[succ_id] == white:
-                        result = dfs(succ_id)
-                        if result:
-                            return result
-            color[node_id] = black
-            return None
-
         for node_id in dag.nodes:
-            if color[node_id] == white:
-                result = dfs(node_id)
-                if result:
-                    return result
+            if color[node_id] != white:
+                continue
+            color[node_id] = gray
+            stack = [(node_id, iter(dag.nodes[node_id].successors))]
+            while stack:
+                current, successors = stack[-1]
+                succ_id = next(successors, None)
+                if succ_id is None:
+                    color[current] = black
+                    stack.pop()
+                elif succ_id in color:
+                    if color[succ_id] == gray:
+                        return f"Cycle detected: {current} -> {succ_id}"
+                    if color[succ_id] == white:
+                        color[succ_id] = gray
+                        stack.append((succ_id, iter(dag.nodes[succ_id].successors)))
         return None
 
     @staticmethod
-    def _check_dependency_integrity(dag: DynamicDAG) -> Optional[str]:
+    def _check_dependency_integrity(dag: DynamicDAG) -> str | None:
         for node in dag.nodes.values():
             for dep_id in node.dependencies:
                 if dep_id not in dag.nodes:

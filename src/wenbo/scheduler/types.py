@@ -8,6 +8,11 @@ from typing import Any
 
 @dataclass(frozen=True)
 class SchedulingCandidate:
+    """Immutable selection record referencing a mutable READY node.
+
+    ready_order is the current eligible queue order, not a timestamp.
+    """
+
     dag_id: str
     agent_id: str
     dag_priority: int
@@ -20,6 +25,11 @@ class SchedulingCandidate:
 
 @dataclass(frozen=True)
 class SchedulingDecision:
+    """Candidate selection plus policy identity, diagnostic score, and reason.
+
+    List order determines dispatch preference; scores are policy-specific.
+    """
+
     candidate: SchedulingCandidate
     score: float
     policy_name: str

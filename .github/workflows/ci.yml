@@ -26,15 +26,33 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install ".[dev]"
 
       - name: Lint public code
         run: |
-          python -m ruff check --select E9,F63,F7,F82 src/wenbo
-          python -m ruff check examples/quickstart.py tests/test_quickstart.py
+          python -m ruff check src examples tests
+          python -m ruff format --check src examples tests
+
+      - name: Build and install distribution
+        run: |
+          python -m build
+          python -m pip install --no-deps --force-reinstall dist/*.whl
 
       - name: Run tests
-        run: python -m pytest -q tests/test_quickstart.py
+        run: python -m pytest -q
 
-      - name: Run quickstart
-        run: python examples/quickstart.py --output-file .local/ci/result.json
+      - name: Check paper launcher
+        run: |
+          python -I examples/quickstart.py --help
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install documentation dependencies
+        run: python -m pip install -r docs/requirements.txt
+      - name: Build documentation strictly
+        run: python -m sphinx -b html -W --keep-going docs .local/docs-html

@@ -1,9 +1,9 @@
-"""Flat scheduler API compatibility layer."""
+"""Public scheduler, policy, queue, and scheduling record exports."""
 
 from wenbo.scheduler.policy import (
-    FIFOPolicy,
     FairRoundRobinPolicy,
     FairShortestJobFirstPolicy,
+    FIFOPolicy,
     PriorityPolicy,
     SchedulingPolicy,
     ShortestJobFirstPolicy,

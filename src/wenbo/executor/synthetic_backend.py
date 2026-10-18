@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SyntheticBackendConfig:
+    """Latency and throughput parameters for the async synthetic backend.
+
+    Latency fields use milliseconds; throughput fields use tokens per second.
+    """
+
     gpu_base_latency_ms: float = 2.0
     cpu_base_latency_ms: float = 1.0
     retrieval_base_latency_ms: float = 1.5
@@ -33,7 +38,12 @@ class _SyntheticRequest:
 
 
 class SyntheticBackend(ExecutorBackend):
-    """Simulate node execution time from structured DAG cost fields."""
+    """Simulate backend latency from structured request metadata using asyncio sleep.
+
+    A positive estimated_time_ms takes precedence over the hardware,
+    token, node-type, and transfer estimates. This backend uses elapsed
+    host time; the external benchmark repository uses a separate virtual clock.
+    """
 
     def __init__(self, config: SyntheticBackendConfig | None = None) -> None:
         self._config = config or SyntheticBackendConfig()

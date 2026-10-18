@@ -1,17 +1,17 @@
 """In-process worker placement for the Wenbo scheduler.
 
-The production architecture can place a node on a remote worker.  Wenbo keeps
-the same boundary locally: a :class:`WorkerPool` owns worker capabilities and
-leases, while an :class:`~wenbo.executor.base.ExecutorBackend` remains the
-execution implementation.  This makes placement observable and replaceable
-without forcing a distributed runtime on the current project.
+WorkerPool matches nodes to local worker capabilities and tracks assignments
+with leases. ExecutorBackend implements request execution independently of
+placement. Each worker provides one logical slot; this module does not
+register remote workers or reserve physical devices.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import time
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Any
 from uuid import uuid4
 
 from wenbo.executor.base import ExecutorBackend
@@ -22,7 +22,7 @@ class WorkerCapability:
     """Resources a worker advertises to the scheduler.
 
     A value of zero for a capacity means "unknown/unbounded".  That is useful
-    for the existing generic mock and local backends, which do not expose
+    for the generic local backends, which do not expose
     device-level telemetry yet.
     """
 
@@ -33,6 +33,7 @@ class WorkerCapability:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def supports(self, node: Any) -> bool:
+        """Check declared hardware, CPU cores, and GPU memory, ignoring health and occupancy."""
         requested_hardware = str(getattr(node, "hardware", "any") or "any").lower()
         worker_hardware = self.hardware.lower()
         if requested_hardware not in {"", "any"}:
@@ -63,7 +64,7 @@ class WorkerCapability:
 
 @dataclass
 class Worker:
-    """A schedulable execution endpoint."""
+    """Single-slot execution endpoint with a backend, advertised capability, and health state."""
 
     worker_id: str
     backend: ExecutorBackend
@@ -76,12 +77,17 @@ class Worker:
         return self.capability.hardware
 
     def can_run(self, node: Any) -> bool:
+        """Return whether the worker is healthy, idle, and compatible with this node."""
         return self.healthy and self.active_tasks == 0 and self.capability.supports(node)
 
 
 @dataclass(frozen=True)
 class WorkerLease:
-    """The immutable assignment passed to an execution task."""
+    """Immutable assignment identifying a worker, node, and execution attempt.
+
+    expires_at, when set, uses seconds from time.monotonic(). The lease
+    records placement; it does not execute or cancel backend requests.
+    """
 
     worker_id: str
     backend: ExecutorBackend
@@ -90,7 +96,7 @@ class WorkerLease:
     dag_id: str = ""
     node_id: str = ""
     attempt: int = 1
-    expires_at: Optional[float] = None
+    expires_at: float | None = None
 
 
 class WorkerPool:
@@ -110,9 +116,7 @@ class WorkerPool:
         if len(ids) != len(set(ids)):
             raise ValueError("Worker IDs must be unique")
         self._workers_by_id = {worker.worker_id: worker for worker in self._workers}
-        self._worker_index = {
-            worker.worker_id: index for index, worker in enumerate(self._workers)
-        }
+        self._worker_index = {worker.worker_id: index for index, worker in enumerate(self._workers)}
         self._workers_by_hardware: dict[str, list[Worker]] = {}
         for worker in self._workers:
             self._workers_by_hardware.setdefault(worker.hardware.lower(), []).append(worker)
@@ -123,9 +127,7 @@ class WorkerPool:
         self._capacity_by_hardware: dict[str, int] = {}
         for worker in self._workers:
             hardware = worker.hardware.lower()
-            self._capacity_by_hardware[hardware] = (
-                self._capacity_by_hardware.get(hardware, 0) + 1
-            )
+            self._capacity_by_hardware[hardware] = self._capacity_by_hardware.get(hardware, 0) + 1
         self._cursor = 0
 
     @classmethod
@@ -134,9 +136,14 @@ class WorkerPool:
         backend: ExecutorBackend,
         *,
         max_concurrent: int = 1,
-        resource_limits: Optional[dict[str, int]] = None,
-    ) -> "WorkerPool":
-        """Build a local pool while preserving the legacy Scheduler options."""
+        resource_limits: dict[str, int] | None = None,
+    ) -> WorkerPool:
+        """Create single-slot local workers sharing one backend.
+
+        Positive resource_limits constrain the named hardware only. Other
+        CPU/GPU types and hardware-agnostic nodes receive fallback slots.
+        Scheduler.max_concurrent still imposes the global dispatch limit.
+        """
         limits = {
             str(hardware).lower(): int(limit)
             for hardware, limit in (resource_limits or {}).items()
@@ -153,9 +160,8 @@ class WorkerPool:
                             capability=WorkerCapability(hardware=hardware),
                         )
                     )
-            # A limit only constrains the resource named by the caller.  Keep
-            # the previous behavior for the other common device type and for
-            # explicitly hardware-agnostic nodes, subject to max_concurrent.
+            # Explicit limits constrain only the named hardware. Unspecified
+            # hardware and hardware-agnostic nodes use max_concurrent slots.
             generic_count = max(int(max_concurrent), 1)
             workers.extend(
                 Worker(
@@ -203,15 +209,13 @@ class WorkerPool:
         return candidates
 
     def can_run(self, node: Any) -> bool:
+        """Return whether a compatible healthy worker is idle now."""
         return any(worker.can_run(node) for worker in self._candidate_workers(node))
 
-    # 区分硬件能力不支持与资源暂时忙碌，避免把等待资源的节点判为失败。
+    # Distinguish unsupported capabilities from busy resources so waiting nodes are not marked failed.
     def supports(self, node: Any) -> bool:
         """Return whether any registered capability can ever run the node."""
-        return any(
-            worker.capability.supports(node)
-            for worker in self._candidate_workers(node)
-        )
+        return any(worker.capability.supports(node) for worker in self._candidate_workers(node))
 
     def acquire(
         self,
@@ -220,9 +224,13 @@ class WorkerPool:
         dag_id: str = "",
         node_id: str = "",
         attempt: int = 1,
-        lease_ttl_s: Optional[float] = None,
-    ) -> Optional[WorkerLease]:
-        """Reserve one compatible healthy worker, if one is available."""
+        lease_ttl_s: float | None = None,
+    ) -> WorkerLease | None:
+        """Reserve one compatible healthy worker, or return None if none is idle.
+
+        lease_ttl_s is an optional lifetime in monotonic seconds. Call release
+        after execution; reap_expired only reclaims placement bookkeeping.
+        """
         candidates = self._candidate_workers(node)
         count = len(candidates)
         if not count:
@@ -243,9 +251,7 @@ class WorkerPool:
                 node_id=node_id,
                 attempt=max(int(attempt), 1),
                 expires_at=(
-                    time.monotonic() + float(lease_ttl_s)
-                    if lease_ttl_s is not None
-                    else None
+                    time.monotonic() + float(lease_ttl_s) if lease_ttl_s is not None else None
                 ),
             )
             self._active_leases[lease.lease_id] = lease
@@ -253,6 +259,7 @@ class WorkerPool:
         return None
 
     def release(self, lease: WorkerLease | str) -> bool:
+        """Release a lease object, lease ID, or one lease for a worker ID; report success."""
         if isinstance(lease, WorkerLease):
             active = self._active_leases.pop(lease.lease_id, None)
             if active is None:
@@ -264,11 +271,10 @@ class WorkerPool:
                 worker = self._workers_by_id.get(active.worker_id)
             else:
                 worker = self._workers_by_id.get(lease)
-            if worker is None:
-                return False
-                # Keep the legacy worker-id release API, but still retire the
-                # corresponding lease.  Otherwise a string release would
-                # leave a stale lease forever and make expiration incorrect.
+                if worker is None:
+                    return False
+                # A worker ID releases one matching lease as well as
+                # decrementing the worker's active-task count.
                 active_id = next(
                     (
                         lease_id
@@ -286,12 +292,11 @@ class WorkerPool:
             self._available_count += 1
         return True
 
-    def reap_expired(self, now: Optional[float] = None) -> list[WorkerLease]:
-        """Release leases whose monotonic deadline has elapsed.
+    def reap_expired(self, now: float | None = None) -> list[WorkerLease]:
+        """Release expired leases and return them for caller-side handling.
 
-        The scheduler can call this from its heartbeat.  Returning the
-        expired leases lets a higher layer decide whether the corresponding
-        node should be retried, failed, or marked unknown.
+        now uses time.monotonic() seconds when supplied. This method neither
+        cancels backend requests nor retries nodes; callers own those actions.
         """
         current = time.monotonic() if now is None else float(now)
         expired: list[WorkerLease] = []

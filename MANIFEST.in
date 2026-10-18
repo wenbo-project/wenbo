@@ -1,0 +1,17 @@
+include LICENSE README.md CONTRIBUTING.md
+include pyproject.toml ruff.toml .gitattributes .gitignore .pre-commit-config.yaml
+recursive-include src/wenbo *.py
+recursive-include examples *.py *.json
+recursive-include tests *.py
+recursive-include docs *.md
+recursive-include .github/workflows *.yml
+prune .local
+prune build
+prune dist
+global-exclude __pycache__ *.py[cod]
+
+include .readthedocs.yaml
+recursive-include docs *.py *.txt *.rst *.css *.html
+
+include docs/Makefile docs/make.bat
+recursive-include docs/_static *

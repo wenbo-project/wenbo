@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Optional
+from typing import Any
 
 from wenbo.dag.model import DAGState, NodeState
 from wenbo.runtime.event import Event, EventBus, EventType
@@ -13,34 +13,45 @@ logger = logging.getLogger(__name__)
 
 
 class RuntimeStateMachine:
+    """Apply node transitions, dependency unlocks, retry backoff, and DAG terminal states.
+
+    Transitions mutate registered graph instances and publish lifecycle
+    events. Positive attempt numbers and supplied lease IDs guard against
+    stale completions from earlier executions.
+    """
+
     def __init__(self, event_bus: EventBus, registry: Any) -> None:
         self._event_bus = event_bus
         self._registry = registry
 
     async def on_dag_submitted(self, dag: Any) -> None:
+        """Move a CREATED graph to RUNNING and publish readiness for its root nodes."""
         if dag.state != DAGState.CREATED:
             return
         dag.state = DAGState.RUNNING
+        self._registry.update_state(dag.dag_id, DAGState.CREATED, DAGState.RUNNING)
         ready_count = 0
         for node in dag.nodes.values():
             node.remaining_dependencies = sum(
                 1
                 for dep_id in node.dependencies
-                if dep_id in dag.nodes
-                and dag.nodes[dep_id].state != NodeState.COMPLETED
+                if dep_id in dag.nodes and dag.nodes[dep_id].state != NodeState.COMPLETED
             )
-        # 首先唤醒根节点，后续节点由依赖完成事件逐步解锁。
+        # Activate roots first; dependency completion events unlock subsequent nodes.
         for node in dag.get_root_nodes():
+            if dag.state != DAGState.RUNNING:
+                break
             if node.state in (NodeState.PENDING, NodeState.READY):
                 node.state = NodeState.READY
                 ready_count += 1
-                await self._event_bus.publish(Event(
-                    event_type=EventType.NODE_READY,
-                    dag_id=dag.dag_id,
-                    run_id=dag.run_id,
-                    node_id=node.node_id,
-                ))
-        self._registry.update_state(dag.dag_id, DAGState.CREATED, DAGState.RUNNING)
+                await self._event_bus.publish(
+                    Event(
+                        event_type=EventType.NODE_READY,
+                        dag_id=dag.dag_id,
+                        run_id=dag.run_id,
+                        node_id=node.node_id,
+                    )
+                )
         logger.info("DAG %s submitted, %d root nodes ready", dag.dag_id, ready_count)
 
     async def on_node_started(
@@ -49,40 +60,44 @@ class RuntimeStateMachine:
         node_id: str,
         *,
         attempt: int = 0,
-        lease_id: Optional[str] = None,
-        worker_id: Optional[str] = None,
+        lease_id: str | None = None,
+        worker_id: str | None = None,
     ) -> bool:
+        """Move a READY node to RUNNING; return False if it cannot start."""
         node = dag.nodes.get(node_id)
-        if node is None or node.state != NodeState.READY:
+        if dag.state != DAGState.RUNNING or node is None or node.state != NodeState.READY:
             return False
         node.state = NodeState.RUNNING
         if attempt > 0:
             node.attempt = attempt
         node.lease_id = lease_id
         node.retry_not_before = 0.0
-        await self._event_bus.publish(Event(
-            event_type=EventType.NODE_STARTED,
-            dag_id=dag.dag_id,
-            run_id=dag.run_id,
-            node_id=node_id,
-            attempt=node.attempt,
-            lease_id=lease_id,
-            worker_id=worker_id,
-        ))
-        return True
+        await self._event_bus.publish(
+            Event(
+                event_type=EventType.NODE_STARTED,
+                dag_id=dag.dag_id,
+                run_id=dag.run_id,
+                node_id=node_id,
+                attempt=node.attempt,
+                lease_id=lease_id,
+                worker_id=worker_id,
+            )
+        )
+        return dag.state == DAGState.RUNNING and node.state == NodeState.RUNNING
 
     async def on_node_completed(
         self,
         dag: Any,
         node_id: str,
-        result: Optional[dict] = None,
+        result: dict | None = None,
         *,
         attempt: int = 0,
-        lease_id: Optional[str] = None,
-        worker_id: Optional[str] = None,
+        lease_id: str | None = None,
+        worker_id: str | None = None,
     ) -> bool:
+        """Accept a matching running attempt, store its result, and unlock successors; report acceptance."""
         node = dag.nodes.get(node_id)
-        if node is None or node.state != NodeState.RUNNING:
+        if dag.state != DAGState.RUNNING or node is None or node.state != NodeState.RUNNING:
             return False
         if attempt > 0 and node.attempt != attempt:
             return False
@@ -96,37 +111,38 @@ class RuntimeStateMachine:
             node.result = result
         logger.debug("Node %s completed in DAG %s", node_id, dag.dag_id)
 
-        await self._event_bus.publish(Event(
-            event_type=EventType.NODE_COMPLETED,
-            dag_id=dag.dag_id,
-            run_id=dag.run_id,
-            node_id=node_id,
-            attempt=node.attempt,
-            lease_id=event_lease_id,
-            worker_id=worker_id,
-            data=result or {},
-        ))
+        await self._event_bus.publish(
+            Event(
+                event_type=EventType.NODE_COMPLETED,
+                dag_id=dag.dag_id,
+                run_id=dag.run_id,
+                node_id=node_id,
+                attempt=node.attempt,
+                lease_id=event_lease_id,
+                worker_id=worker_id,
+                data=result or {},
+            )
+        )
 
-        # 更新后继节点的依赖状态，满足条件后发布就绪事件。
+        if dag.state != DAGState.RUNNING:
+            return True
+
+        # Update successor dependencies and publish ready events when they are satisfied.
         await self._check_successors(dag, node_id, result)
 
+        if dag.state != DAGState.RUNNING:
+            return True
         if dag.is_completed():
             dag.state = DAGState.COMPLETED
             self._registry.update_state(dag.dag_id, DAGState.RUNNING, DAGState.COMPLETED)
-            await self._event_bus.publish(Event(
-                event_type=EventType.DAG_COMPLETED,
-                dag_id=dag.dag_id,
-                run_id=dag.run_id,
-            ))
+            await self._event_bus.publish(
+                Event(
+                    event_type=EventType.DAG_COMPLETED,
+                    dag_id=dag.dag_id,
+                    run_id=dag.run_id,
+                )
+            )
             logger.info("DAG %s completed", dag.dag_id)
-        elif dag.has_failed():
-            dag.state = DAGState.FAILED
-            self._registry.update_state(dag.dag_id, DAGState.RUNNING, DAGState.FAILED)
-            await self._event_bus.publish(Event(
-                event_type=EventType.DAG_FAILED,
-                dag_id=dag.dag_id,
-                run_id=dag.run_id,
-            ))
         return True
 
     async def on_node_failed(
@@ -136,12 +152,18 @@ class RuntimeStateMachine:
         error: str = "",
         *,
         attempt: int = 0,
-        lease_id: Optional[str] = None,
-        worker_id: Optional[str] = None,
+        lease_id: str | None = None,
+        worker_id: str | None = None,
         retryable: bool = True,
     ) -> bool:
+        """Accept a running-attempt failure and retry or fail the graph.
+
+        Returns False for a stale or non-running attempt. Retryable failures
+        become READY while retry_count is within max_retries, with eligibility
+        delayed by retry_backoff_ms on the monotonic clock.
+        """
         node = dag.nodes.get(node_id)
-        if node is None or node.state != NodeState.RUNNING:
+        if dag.state != DAGState.RUNNING or node is None or node.state != NodeState.RUNNING:
             return False
         if attempt > 0 and node.attempt != attempt:
             return False
@@ -152,46 +174,56 @@ class RuntimeStateMachine:
         node.retry_count += 1
         node.request_id = None
         logger.warning("Node %s failed in DAG %s: %s", node_id, dag.dag_id, error)
-        await self._event_bus.publish(Event(
-            event_type=EventType.NODE_FAILED,
-            dag_id=dag.dag_id,
-            run_id=dag.run_id,
-            node_id=node_id,
-            attempt=node.attempt,
-            lease_id=event_lease_id,
-            worker_id=worker_id,
-            data={"error": error, "retryable": retryable},
-        ))
+        await self._event_bus.publish(
+            Event(
+                event_type=EventType.NODE_FAILED,
+                dag_id=dag.dag_id,
+                run_id=dag.run_id,
+                node_id=node_id,
+                attempt=node.attempt,
+                lease_id=event_lease_id,
+                worker_id=worker_id,
+                data={"error": error, "retryable": retryable},
+            )
+        )
 
-        # 可重试的失败重新进入就绪状态，实际执行需等待退避时间结束。
+        if dag.state != DAGState.RUNNING:
+            node.lease_id = None
+            return True
+
+        # Retriable failures return to READY but cannot execute until their backoff expires.
         if retryable and node.retry_count <= max(int(node.max_retries), 0):
             node.state = NodeState.READY
             node.lease_id = None
             backoff_ms = max(float(node.retry_backoff_ms), 0.0)
             node.retry_not_before = time.monotonic() + backoff_ms / 1000.0
-            await self._event_bus.publish(Event(
-                event_type=EventType.NODE_READY,
-                dag_id=dag.dag_id,
-                run_id=dag.run_id,
-                node_id=node_id,
-                attempt=node.attempt + 1,
-                data={
-                    "retry": node.retry_count,
-                    "backoff_ms": backoff_ms,
-                },
-            ))
+            await self._event_bus.publish(
+                Event(
+                    event_type=EventType.NODE_READY,
+                    dag_id=dag.dag_id,
+                    run_id=dag.run_id,
+                    node_id=node_id,
+                    attempt=node.attempt + 1,
+                    data={
+                        "retry": node.retry_count,
+                        "backoff_ms": backoff_ms,
+                    },
+                )
+            )
             return True
 
         dag.state = DAGState.FAILED
         self._registry.update_state(dag.dag_id, DAGState.RUNNING, DAGState.FAILED)
         node.lease_id = None
         await self._cancel_unstarted_nodes(dag, "DAG failed")
-        await self._event_bus.publish(Event(
-            event_type=EventType.DAG_FAILED,
-            dag_id=dag.dag_id,
-            run_id=dag.run_id,
-            data={"error": error},
-        ))
+        await self._event_bus.publish(
+            Event(
+                event_type=EventType.DAG_FAILED,
+                dag_id=dag.dag_id,
+                run_id=dag.run_id,
+                data={"error": error},
+            )
+        )
         return True
 
     async def on_node_cancelled(
@@ -201,9 +233,10 @@ class RuntimeStateMachine:
         reason: str = "",
         *,
         attempt: int = 0,
-        lease_id: Optional[str] = None,
-        worker_id: Optional[str] = None,
+        lease_id: str | None = None,
+        worker_id: str | None = None,
     ) -> bool:
+        """Cancel an eligible node; return False for terminal nodes or stale attempt/lease IDs."""
         node = dag.nodes.get(node_id)
         if node is None or node.state not in (
             NodeState.PENDING,
@@ -220,16 +253,18 @@ class RuntimeStateMachine:
         node.state = NodeState.CANCELLED
         node.request_id = None
         node.lease_id = None
-        await self._event_bus.publish(Event(
-            event_type=EventType.NODE_CANCELLED,
-            dag_id=dag.dag_id,
-            run_id=dag.run_id,
-            node_id=node_id,
-            attempt=node.attempt,
-            lease_id=event_lease_id,
-            worker_id=worker_id,
-            data={"reason": reason},
-        ))
+        await self._event_bus.publish(
+            Event(
+                event_type=EventType.NODE_CANCELLED,
+                dag_id=dag.dag_id,
+                run_id=dag.run_id,
+                node_id=node_id,
+                attempt=node.attempt,
+                lease_id=event_lease_id,
+                worker_id=worker_id,
+                data={"reason": reason},
+            )
+        )
         return True
 
     async def _cancel_unstarted_nodes(self, dag: Any, reason: str) -> None:
@@ -242,6 +277,8 @@ class RuntimeStateMachine:
         if dag.state in (DAGState.COMPLETED, DAGState.FAILED, DAGState.CANCELLED):
             return False
         old_state = dag.state
+        dag.state = DAGState.CANCELLED
+        self._registry.update_state(dag.dag_id, old_state, DAGState.CANCELLED)
         for node in dag.nodes.values():
             if node.state not in (
                 NodeState.PENDING,
@@ -251,14 +288,14 @@ class RuntimeStateMachine:
             ):
                 continue
             await self.on_node_cancelled(dag, node.node_id, reason)
-        dag.state = DAGState.CANCELLED
-        self._registry.update_state(dag.dag_id, old_state, DAGState.CANCELLED)
-        await self._event_bus.publish(Event(
-            event_type=EventType.DAG_CANCELLED,
-            dag_id=dag.dag_id,
-            run_id=dag.run_id,
-            data={"reason": reason},
-        ))
+        await self._event_bus.publish(
+            Event(
+                event_type=EventType.DAG_CANCELLED,
+                dag_id=dag.dag_id,
+                run_id=dag.run_id,
+                data={"reason": reason},
+            )
+        )
         return True
 
     async def on_node_unschedulable(
@@ -281,33 +318,44 @@ class RuntimeStateMachine:
         node.request_id = None
         node.lease_id = None
         node.result = {"error": reason, "unschedulable": True}
-        await self._event_bus.publish(Event(
-            event_type=EventType.NODE_FAILED,
-            dag_id=dag.dag_id,
-            run_id=dag.run_id,
-            node_id=node_id,
-            attempt=node.attempt,
-            data={"error": reason, "unschedulable": True},
-        ))
+        await self._event_bus.publish(
+            Event(
+                event_type=EventType.NODE_FAILED,
+                dag_id=dag.dag_id,
+                run_id=dag.run_id,
+                node_id=node_id,
+                attempt=node.attempt,
+                data={"error": reason, "unschedulable": True},
+            )
+        )
+        if dag.state != DAGState.RUNNING:
+            return True
         dag.state = DAGState.FAILED
         self._registry.update_state(dag.dag_id, DAGState.RUNNING, DAGState.FAILED)
         await self._cancel_unstarted_nodes(dag, "DAG contains an unschedulable node")
-        await self._event_bus.publish(Event(
-            event_type=EventType.DAG_FAILED,
-            dag_id=dag.dag_id,
-            run_id=dag.run_id,
-            data={"error": reason, "unschedulable": True},
-        ))
+        await self._event_bus.publish(
+            Event(
+                event_type=EventType.DAG_FAILED,
+                dag_id=dag.dag_id,
+                run_id=dag.run_id,
+                data={"error": reason, "unschedulable": True},
+            )
+        )
         return True
 
     async def _check_successors(
         self,
         dag: Any,
         completed_node_id: str,
-        result: Optional[dict] = None,
+        result: dict | None = None,
     ) -> None:
-        completed_node = dag.nodes[completed_node_id]
-        for succ_id in list(completed_node.successors):
+        stack = [(iter(dag.nodes[completed_node_id].successors), result)]
+        while stack and dag.state == DAGState.RUNNING:
+            successors, result = stack[-1]
+            succ_id = next(successors, None)
+            if succ_id is None:
+                stack.pop()
+                continue
             succ = dag.nodes.get(succ_id)
             if succ is None or succ.state != NodeState.PENDING:
                 continue
@@ -323,25 +371,31 @@ class RuntimeStateMachine:
                 succ.parent_decision = decision
                 if decision == "skip":
                     succ.state = NodeState.SKIPPED
-                    await self._event_bus.publish(Event(
-                        event_type=EventType.NODE_SKIPPED,
-                        dag_id=dag.dag_id,
-                        run_id=dag.run_id,
-                        node_id=succ_id,
-                    ))
-                    await self._check_successors(dag, succ_id)
+                    await self._event_bus.publish(
+                        Event(
+                            event_type=EventType.NODE_SKIPPED,
+                            dag_id=dag.dag_id,
+                            run_id=dag.run_id,
+                            node_id=succ_id,
+                        )
+                    )
+                    stack.append((iter(dag.nodes[succ_id].successors), None))
                     continue
 
             succ.state = NodeState.READY
-            await self._event_bus.publish(Event(
-                event_type=EventType.NODE_READY,
-                dag_id=dag.dag_id,
-                run_id=dag.run_id,
-                node_id=succ_id,
-            ))
+            await self._event_bus.publish(
+                Event(
+                    event_type=EventType.NODE_READY,
+                    dag_id=dag.dag_id,
+                    run_id=dag.run_id,
+                    node_id=succ_id,
+                )
+            )
 
 
 class DAGStateTracker:
+    """Public facade delegating lifecycle notifications to RuntimeStateMachine."""
+
     def __init__(self, event_bus: EventBus, registry: Any) -> None:
         self._state_machine = RuntimeStateMachine(event_bus, registry)
 
@@ -354,8 +408,8 @@ class DAGStateTracker:
         node_id: str,
         *,
         attempt: int = 0,
-        lease_id: Optional[str] = None,
-        worker_id: Optional[str] = None,
+        lease_id: str | None = None,
+        worker_id: str | None = None,
     ) -> bool:
         return await self._state_machine.on_node_started(
             dag,
@@ -369,11 +423,11 @@ class DAGStateTracker:
         self,
         dag: Any,
         node_id: str,
-        result: Optional[dict] = None,
+        result: dict | None = None,
         *,
         attempt: int = 0,
-        lease_id: Optional[str] = None,
-        worker_id: Optional[str] = None,
+        lease_id: str | None = None,
+        worker_id: str | None = None,
     ) -> bool:
         return await self._state_machine.on_node_completed(
             dag,
@@ -391,8 +445,8 @@ class DAGStateTracker:
         error: str = "",
         *,
         attempt: int = 0,
-        lease_id: Optional[str] = None,
-        worker_id: Optional[str] = None,
+        lease_id: str | None = None,
+        worker_id: str | None = None,
         retryable: bool = True,
     ) -> bool:
         return await self._state_machine.on_node_failed(
@@ -415,8 +469,8 @@ class DAGStateTracker:
         reason: str = "",
         *,
         attempt: int = 0,
-        lease_id: Optional[str] = None,
-        worker_id: Optional[str] = None,
+        lease_id: str | None = None,
+        worker_id: str | None = None,
     ) -> bool:
         return await self._state_machine.on_node_cancelled(
             dag,

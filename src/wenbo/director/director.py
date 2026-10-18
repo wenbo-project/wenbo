@@ -7,7 +7,7 @@ It validates and normalizes a DAG IR before the runtime owns its lifecycle.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from wenbo.dag.model import DynamicDAG
 from wenbo.dag.validator import DAGValidator, ValidationError
@@ -17,9 +17,9 @@ from wenbo.dag.validator import DAGValidator, ValidationError
 class AdmissionLimits:
     """Static limits protecting the in-process simulation from malformed input."""
 
-    max_nodes: Optional[int] = None
-    max_edges: Optional[int] = None
-    max_priority: Optional[int] = None
+    max_nodes: int | None = None
+    max_edges: int | None = None
+    max_priority: int | None = None
 
 
 class Director:
@@ -27,19 +27,28 @@ class Director:
 
     def __init__(
         self,
-        validator: Optional[DAGValidator] = None,
-        limits: Optional[AdmissionLimits] = None,
+        validator: DAGValidator | None = None,
+        limits: AdmissionLimits | None = None,
     ) -> None:
         self._validator = validator or DAGValidator()
         self._limits = limits or AdmissionLimits()
 
     def compile(self, dag: DynamicDAG) -> DynamicDAG:
-        """Normalize and validate a DAG in place, then return it.
+        """Normalize and validate a graph in place, preserving object identity.
 
-        The current public API exposes the same ``DynamicDAG`` instance after
-        submission, so compilation intentionally preserves object identity.
-        A future DAGSpec/DAGRun split can make this boundary immutable without
-        changing Scheduler or Worker contracts.
+        Hardware labels are normalized and incoming transfer sizes are
+        recomputed in node metadata. Static admission limits, nonnegative
+        estimates, retry settings, and graph structure are validated.
+
+        Args:
+            dag: A pre-built DynamicDAG; compilation does not execute its nodes.
+
+        Returns:
+            The same graph instance after normalization.
+
+        Raises:
+            TypeError: The input is not a DynamicDAG.
+            ValidationError: The graph violates an admission or structural constraint.
         """
         if not isinstance(dag, DynamicDAG):
             raise TypeError("Director expects an wenbo.dag.model.DynamicDAG")
@@ -54,17 +63,11 @@ class Director:
 
         limits = self._limits
         if limits.max_nodes is not None and len(dag.nodes) > limits.max_nodes:
-            raise ValidationError(
-                f"DAG '{dag.dag_id}' exceeds max_nodes={limits.max_nodes}"
-            )
+            raise ValidationError(f"DAG '{dag.dag_id}' exceeds max_nodes={limits.max_nodes}")
         if limits.max_edges is not None and len(dag.edges) > limits.max_edges:
-            raise ValidationError(
-                f"DAG '{dag.dag_id}' exceeds max_edges={limits.max_edges}"
-            )
+            raise ValidationError(f"DAG '{dag.dag_id}' exceeds max_edges={limits.max_edges}")
         if limits.max_priority is not None and dag.priority > limits.max_priority:
-            raise ValidationError(
-                f"DAG '{dag.dag_id}' exceeds max_priority={limits.max_priority}"
-            )
+            raise ValidationError(f"DAG '{dag.dag_id}' exceeds max_priority={limits.max_priority}")
 
         incoming_bytes = {node_id: 0 for node_id in dag.nodes}
         for edge in dag.edges.values():
@@ -75,17 +78,11 @@ class Director:
         for node in dag.nodes.values():
             node.hardware = str(node.hardware or "any").strip().lower() or "any"
             if node.estimated_tokens < 0:
-                raise ValidationError(
-                    f"Node '{node.node_id}' has negative estimated_tokens"
-                )
+                raise ValidationError(f"Node '{node.node_id}' has negative estimated_tokens")
             if node.max_retries < 0:
-                raise ValidationError(
-                    f"Node '{node.node_id}' has negative max_retries"
-                )
+                raise ValidationError(f"Node '{node.node_id}' has negative max_retries")
             if node.retry_backoff_ms < 0:
-                raise ValidationError(
-                    f"Node '{node.node_id}' has negative retry_backoff_ms"
-                )
+                raise ValidationError(f"Node '{node.node_id}' has negative retry_backoff_ms")
             resource = node.resource_requirement
             if resource is not None:
                 for field_name in (
@@ -115,8 +112,13 @@ class Director:
         return dag
 
     def admit(self, dag: DynamicDAG, registry: Any) -> DynamicDAG:
-        """Compile and register a DAG, rejecting duplicate IDs."""
-        # 先规范化并校验 DAG，再注册到运行时，避免无效任务进入调度队列。
+        """Compile and register a graph, rejecting an already registered DAG ID.
+
+        Returns the same graph instance. ValidationError reports invalid
+        inputs or a duplicate ID; compilation may already have normalized
+        the caller's graph when an error is raised.
+        """
+        # Normalize and validate before registration to keep invalid tasks out of the scheduling queue.
         compiled = self.compile(dag)
         if registry.get(compiled.dag_id) is not None:
             raise ValidationError(f"DAG '{compiled.dag_id}' is already registered")

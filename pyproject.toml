@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,12 +8,12 @@ version = "0.1.0"
 description = "Event-driven multi-DAG scheduling for LLM workflows"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Wenbo Contributors" }]
 keywords = ["agent", "dag", "llm", "scheduling", "workflow"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -26,9 +26,8 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
-    "pytest-asyncio>=0.21",
-    "pytest-cov>=4.0",
-    "ruff>=0.5",
+    "build>=1.2",
+    "ruff==0.17.1",
 ]
 
 [tool.setuptools.packages.find]
@@ -39,5 +38,5 @@ namespaces = false
 "" = "src"
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
+addopts = "--import-mode=importlib --strict-config --strict-markers"
 testpaths = ["tests"]

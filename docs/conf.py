@@ -6,9 +6,10 @@ author = "Wenbo Contributors"
 version = "0.1"
 release = "0.1.0"
 
-extensions = []
+extensions = ["myst_parser"]
+myst_heading_anchors = 4
 templates_path = ["_templates"]
-exclude_patterns = []
+exclude_patterns = ["_build", "build", "Thumbs.db", ".DS_Store"]
 
 language = "en"
 html_theme = "furo"

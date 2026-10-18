@@ -23,62 +23,16 @@ build/
 dist/
 *.egg-info/
 
-# Downloaded datasets and generated DAGs remain local.
-/dataset/raw/
-/dataset/raw_agent_smoke/
-/dataset/problems_merged.jsonl
-/data/converted_dags/
-/data/preliminary_dataset_selection_*/
-
-# Experiment outputs are reproducible from scripts and input data.
-# Keep source code, dataset specifications, and paper sources visible to Git.
-/data/experiments/
-/data/*.csv
-/data/*.json
-/data/*.jsonl
-/data/*.png
-/data/*.pdf
-/data/*.html
-
-design/generated_dags.json
-design/generated_dags_no_layer.json
-design/dag_view.html
-
-# Local research material and release bundles are intentionally not public.
-/archive/
-/backs/
-/tmp/
-/.tmp_*/
-/.toolbench_*/
-/design/
-/design_*/
-/images/
-/tools/
+# Frozen benchmark bundles and generated experiment results.
+/datasets/
 /dataset/
-/scripts/
 /data/
-/ToolBench*/
-/src/wenbo/config/
-/src/wenbo/utils/
-/docs/*
-!/docs/dag-schema.md
-!/docs/source/
-/tests/*
-!/tests/test_quickstart.py
-/*.md
-!/README.md
-/*.png
+/outputs/
+
+# Local archives and build artifacts.
+*.log
+*.tmp
 /*.zip
 /*.tar
 /*.tar.gz
 /*.7z
-/*.aux
-/*.log
-/*.out
-/*.synctex.gz
-/*.pdf
-/*.docx
-/*.tex
-/*.bib
-/*.txt
-/*.code-workspace
