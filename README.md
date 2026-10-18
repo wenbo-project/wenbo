@@ -1,5 +1,9 @@
 # Wenbo
 
+[![Python](https://img.shields.io/badge/Python-3.10+-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![Documentation](https://img.shields.io/badge/Documentation-latest-blue?style=flat-square)](https://wenbo.readthedocs.io/en/latest)
+
 Wenbo is an event-driven scheduler for running multiple DAG-shaped LLM workflows with bounded concurrency. 
 
 Wenbo 是一个面向 LLM 工作流的多 DAG 调度系统。
