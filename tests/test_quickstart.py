@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 
+
 def test_quickstart_completes_example_dag(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[1]
     output_file = tmp_path / "result.json"
