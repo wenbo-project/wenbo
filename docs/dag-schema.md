@@ -72,7 +72,7 @@ If a higher-precedence field is present but zero, the loader does not search low
 | `estimated_compute_flops` | `0` | Floating-point operation count |
 | `estimated_time_ms` | See above | Estimated execution duration in milliseconds |
 
-These fields describe requirements and estimates, not allocated physical resources. See [Execution](user-guide/execution.md) for the constraints currently enforced by worker matching.
+These fields describe requirements and estimates, not allocated physical resources. See [Execution](user-guide/workflows.md) for the constraints currently enforced by worker matching.
 
 ## Edge objects
 

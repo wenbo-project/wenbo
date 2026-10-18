@@ -9,7 +9,6 @@ Wenbo Documentation
    :caption: Overview
 
    introduction
-   architecture
 
 .. toctree::
    :maxdepth: 1
@@ -22,9 +21,6 @@ Wenbo Documentation
    :caption: User Guide
 
    user-guide/workflows
-   user-guide/execution
-   user-guide/scheduling
-   user-guide/observability
 
 .. toctree::
    :maxdepth: 1
@@ -44,5 +40,4 @@ Wenbo Documentation
    :caption: Development
 
    development
-   reference/project-layout
    Contributing <https://github.com/wenbo-project/wenbo/blob/main/CONTRIBUTING.md>

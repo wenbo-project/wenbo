@@ -1,4 +1,4 @@
-# Building and Running Workflows
+# System Usage
 
 This page constructs a two-node `draft → review` DAG through the Python API. Install Wenbo as described in [Quick Start](../quickstart.md) before running the examples.
 
@@ -14,7 +14,7 @@ builder.add_node(dag, "review", prompt="Review: {draft_output}", dependencies=["
 builder.validate(dag)
 ```
 
-For execution, provide a backend implementing `ExecutorBackend` and pass it to `Scheduler`. See [Execution Backends and Workers](execution.md) for the backend interface and worker configuration. The construction example above submits no model requests; see [Quick Start](../quickstart.md) for running paper experiments.
+For execution, provide a backend implementing `ExecutorBackend` and pass it to `Scheduler`. See the backend and worker configuration below. The construction example above submits no model requests; see [Quick Start](../quickstart.md) for running paper experiments.
 
 ## Nodes and dependencies
 
@@ -30,7 +30,7 @@ Load JSON input with `SyntheticDAGLoader.load_from_file()`, which returns a list
 
 The prompt placeholder `{draft_output}` is replaced with the direct predecessor `draft`'s `result["output"]`, stripped of surrounding whitespace. Only direct dependencies are substituted; placeholders remain unchanged when results are missing. `Edge.data_mapping` is metadata and is not currently interpreted by PromptResolver.
 
-By default, `Scheduler(output_mode="raw")` preserves successful backend responses unchanged, including JSON, multiline text, and empty strings. Successful node results retain `output`, `raw_output`, `sanitized_output`, and `sanitize_ok`. In raw mode, the first three contain the original output, and `sanitize_ok` indicates whether it is nonempty. To use legacy short-answer rules, explicitly set `output_mode="short_answer"`. That mode extracts a short answer and treats extraction failure as non-retriable; `permissive_output=True` enables fallback extraction.
+By default, `Scheduler(output_mode="raw")` preserves successful backend outputs. Read a completed node's output from `node.result["output"]`.
 
 ## States, retries, and cancellation
 
@@ -41,3 +41,80 @@ Set `max_retries` and `retry_backoff_ms` when constructing nodes. The former is 
 Cancel a workflow with `await scheduler.cancel_dag(dag_id, reason)`. Unknown or terminal graphs return `False`; otherwise, the workflow is removed from the queue and its local execution tasks are cancelled. `await scheduler.stop()` cancels all unfinished graphs and cleans up background tasks. To retain complete results, wait for terminal graph states before stopping Scheduler.
 
 The runtime continuously mutates submitted graph objects. Direct changes to `state`, dependencies, retry counters, or lease fields bypass event and index updates. This guide covers graph construction before submission. Changing graph structure during execution requires the caller to coordinate the relevant state; editing dictionaries alone is insufficient.
+
+## Built-in backend
+
+| Backend | Execution model | Primary use |
+| --- | --- | --- |
+| `SyntheticBackend` | Estimate latency from structured resource estimates, then wait asynchronously | Throughput experiments through the runtime execution path |
+
+
+SyntheticBackend prioritizes a positive `resource_requirement.estimated_time_ms`. Without an explicit duration, it estimates latency from hardware, node type, tokens, and incoming bytes. Waiting occurs in the host event loop, unlike the discrete-event virtual time used by the [separate benchmark](../experiments/real-datasets.md).
+
+## Backend protocol
+
+| Method | Purpose | Return value |
+| --- | --- | --- |
+| `await submit(request)` | Accept an `LLMRequest` | Backend request ID |
+| `await query(request_id)` | Query backend status | `RequestStatus` |
+| `await wait(request_id, timeout=30.0)` | Await an execution response; timeout is in seconds | `LLMResponse` |
+| `await cancel(request_id)` | Request cancellation | Boolean indicating whether the backend accepted it |
+
+`LLMRequest` contains a model name, prompt, sampling parameters, and structured metadata. Coordinator adds DAG/run/node IDs, attempt, lease ID, resource requirements, and worker identity. `LLMResponse` contains output, success, error, token counts, and latency in milliseconds.
+
+
+Custom backends subclass `ExecutorBackend`, implement these four asynchronous methods, and manage request status, timeouts, and cancellation.
+
+## Explicit worker pools
+
+
+The following function configures two GPU slots and sixteen CPU slots for a caller-supplied backend:
+
+```python
+from wenbo.executor.worker import Worker, WorkerCapability, WorkerPool
+
+
+def create_worker_pool(backend):
+    return WorkerPool([
+        Worker(
+            worker_id=f"{hardware}-{index}",
+            backend=backend,
+            capability=WorkerCapability(hardware=hardware),
+        )
+        for hardware, count in (("gpu", 2), ("cpu", 16))
+        for index in range(count)
+    ])
+```
+
+Pass `worker_pool=pool` and an appropriate `max_concurrent` when constructing Scheduler. An explicit worker pool takes precedence over `resource_limits`; global concurrency remains bounded by `max_concurrent`. Slots are logical execution endpoints: creating workers does not allocate physical hardware.
+
+Workers are logical execution endpoints, not physical device reservations. Backend integrations are responsible for performing the actual computation.
+
+## Built-in policies
+
+| Name | Python class | Ordering |
+| --- | --- | --- |
+| `fifo` | `FIFOPolicy` | Preserve current candidate queue order |
+| `sjf` | `ShortestJobFirstPolicy` | Ascending positive `estimated_tokens`; missing or nonpositive estimates last; ties use ready order |
+| `priority` | `PriorityPolicy` | Descending DAG priority, then node priority, then ready order |
+| `fair_rr` | `FairRoundRobinPolicy` | Select one node per DAG in round-robin order, following each DAG's first appearance among candidates |
+| `fair_sjf` | `FairShortestJobFirstPolicy` | Round-robin across DAGs, with SJF ordering within each DAG |
+
+`fair_rr` and `fair_sjf` regroup candidates on each `select` call and retain no cursor across scheduling rounds. They therefore provide no strict fairness guarantee across rounds. SJF uses structured token estimates rather than inferring costs from prompt length.
+
+Create a policy with the factory function:
+
+```python
+from wenbo.scheduler.policy import build_policy
+
+policy = build_policy("fair_sjf")
+assert policy.policy_id == "fair_sjf@1"
+```
+
+
+Pass `policy=policy` when constructing Scheduler. Unknown policy names raise `ValueError`.
+
+
+## Inspect execution
+
+Use `scheduler.timeline` for node start and completion milestones, `scheduler.decisions` for policy choices, and `scheduler.trace_summary` for execution statistics. Runtime durations use a monotonic host clock; paper experiments use the separate benchmark's virtual clock.

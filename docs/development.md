@@ -26,27 +26,6 @@ Tests cover launcher argument forwarding and failure exits, installed package im
 
 CI installs the package and runs checks on Python 3.10 and 3.12. New syntax and standard library usage must remain compatible with the declared minimum, Python 3.10.
 
-## Source documentation conventions
-
-Use English for public module, type, and method docstrings, implementation comments, and documentation. Explain what callers need to know:
-
-- The responsibility of an object or method and the runtime components it works with.
-- Nonobvious parameter meanings, time and resource units, defaults, and precedence.
-- Return values, possible exceptions, in-place input changes, and other side effects.
-- Actual constraints on concurrency, state, cancellation, leases, and output preservation.
-
-Do not repeat parameters already clear from the signature. Implementation comments should explain constraints and reasoning rather than narrate each line, record conversation history, or describe unimplemented features as available behavior.
-
-Clearly distinguish Unix timestamps, monotonic runtime clocks, and simulator virtual time. Explain when resource values represent logical slots or estimates.
-
-## Navigation and updates
-
-The [documentation home](index.rst) lists pages, the [project layout](reference/project-layout.md) explains directory responsibilities, and the [API index](reference/api.md) lists module paths and common interfaces. Update these entry points and references when adding, renaming, or removing pages. Use relative Markdown links.
-
-When changing interfaces, review source docstrings, the relevant guides, and runnable examples together. For JSON fields, check the loader's actual defaults, precedence, and validation scope. For experiments, verify script arguments, units, input requirements, and reproduction scope.
-
-Run complete Python examples against the installed current package. Link real dataset experiments to the separate benchmark documentation, which maintains commands, prerequisites, and smoke checks. Launcher documentation describes only the companion quickstart profile's interface contract; the benchmark defines simulation semantics and other profiles. Do not rerun full experiments solely to validate prose.
-
 ## Build the documentation
 
 Read the Docs builds the Markdown documentation using `.readthedocs.yaml`, `docs/conf.py`, and `docs/requirements.txt`, with the Furo theme.

@@ -1,6 +1,6 @@
 # Quick Start
 
-This page runs the paper's real-task experiments on StrategyQA, MuSiQue, ToolBench, and ALFWorld with **GPU=2 and CPU=16**, comparing `parallel` with Wenbo. The system's [quickstart.py](https://github.com/wenbo-project/wenbo/blob/main/examples/quickstart.py) only launches the separate benchmark's paper entry point. The benchmark maintains datasets, the unit-node-cost protocol, simulation, and result validation.
+This page runs the paper's real-task experiments on StrategyQA, MuSiQue, ToolBench, and ALFWorld with **GPU=2 and CPU=16**, comparing Flash-Searcher with Wenbo. The system's [quickstart.py](https://github.com/wenbo-project/wenbo/blob/main/examples/quickstart.py) only launches the separate benchmark's paper entry point. The benchmark maintains datasets, the unit-node-cost protocol, simulation, and result validation.
 
 Experiments use discrete-event virtual time and require no API key, model download, or physical GPU. They do not perform real model inference or environment interaction. This page follows the unit-node-cost and lifetime resource-pair baseline protocol in paper §§3.1 and 5.1. See [Experiments](experiments/real-datasets.md) for other resource configurations and full sweeps.
 
@@ -41,7 +41,7 @@ The launcher executes benchmark source through an isolated subprocess; installin
 python -u examples/quickstart.py --benchmark-root ../benchmark
 ```
 
-`-u` displays progress promptly. By default, all four datasets run without a DAG limit using seeds `11, 29, 47`, for **4 × 3 × 2 = 24 simulations**. GPU/CPU is fixed at `2/16`. Every CPU/GPU node takes one virtual time unit. The `parallel_theory_pair` baseline reserves a private CPU/GPU pair at admission and holds it until the entire DAG completes, admitting at most `min(GPU, CPU)` tasks concurrently. Wenbo admits all selected DAGs into its global ready queue and releases resources after each node completes. Full-batch admission is this entry point's implementation choice for finite-batch throughput experiments; the paper does not specify a shared active window.
+`-u` displays progress promptly. By default, all four datasets run without a DAG limit using seeds `11, 29, 47`, for **4 × 3 × 2 = 24 simulations**. GPU/CPU is fixed at `2/16`. Every CPU/GPU node takes one virtual time unit. The Flash-Searcher baseline (`parallel_theory_pair`) reserves a private CPU/GPU pair at admission and holds it until the entire DAG completes, admitting at most `min(GPU, CPU)` tasks concurrently. Wenbo admits all selected DAGs into its global ready queue and releases resources after each node completes. Full-batch admission is this entry point's implementation choice for finite-batch throughput experiments; the paper does not specify a shared active window.
 
 Without `--benchmark-root`, the script searches for a checkout named `benchmark`, starting with the nearest parent directory. Specify the path explicitly for other layouts or multiple checkouts.
 
@@ -50,11 +50,11 @@ The terminal prints two method rows per dataset, followed by the mean speedup an
 | Terminal column | Meaning |
 | --- | --- |
 | `GPU/CPU` | Simulated resource slots, fixed at `2/16` |
-| `Method` | `parallel` or Wenbo; the output records the exact policy version |
+| `Method` | Flash-Searcher or Wenbo; the baseline is recorded as `parallel` in benchmark output |
 | `Time(v-s)` | Virtual completion time of all selected tasks, in seconds |
 | `Nodes/s`, `DAG/s` | Node and DAG throughput calculated using virtual time |
 | `GPU%`, `CPU%`, `All%` | Resource utilization based on node busy time |
-| `Speedup` | `T_parallel / T_method` for each paired seed, averaged over seeds |
+| `Speedup` | `T_Flash-Searcher / T_method` for each paired seed, averaged over seeds |
 
 Host elapsed time is displayed separately and must not be confused with `Time(v-s)`. Smoke checks can produce speedups below `1`; results reflect the actual calculation.
 
