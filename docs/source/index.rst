@@ -1,28 +1,29 @@
 Wenbo Documentation
 ===================
 
-Wenbo is an event-driven scheduling runtime for multi-agent reasoning
-workloads. It represents each workload as a directed acyclic graph (DAG),
-tracks node dependencies, and schedules ready work from all active DAGs
-through one shared execution path.
+Wenbo is a DAG-based serving system for large-scale agent reasoning workloads.
+It represents each agent task as a dynamic reasoning graph, incrementally
+materializes executable DAG flows, and schedules ready nodes from all active
+DAGs across shared GPU and CPU workers.
 
-Instead of binding an entire agent workflow to a fixed set of resources,
-Wenbo schedules each ready node on a compatible CPU or GPU worker. This keeps
-workflow dependencies intact while allowing heterogeneous resources to serve
-multiple workloads efficiently.
+Traditional task-level serving binds each task to a fixed GPU-CPU resource
+bundle even though agent execution alternates between GPU-intensive inference
+and CPU-intensive tool execution, retrieval, and data processing. Wenbo
+decouples individual computation steps from task-wide resource ownership,
+enabling fine-grained resource sharing while preserving the dependencies
+within each reasoning workflow.
 
 Core Advantages:
 
-* **Global Node-Level Scheduling:** Collects ready nodes from all active DAGs
-  into one scheduling domain, allowing resources to be shared across
-  concurrent reasoning workloads.
-* **Efficient CPU/GPU Utilization:** Schedules each node on a compatible
-  worker, so one workflow can use capacity that another workflow temporarily
-  leaves idle.
-* **Dependency-Aware Execution:** Preserves DAG dependency guarantees while
-  independently dispatching ready work according to resource availability.
-* **Pluggable Scheduling Policies:** Supports multiple scheduling strategies
-  without coupling workflow definitions to a specific execution policy.
+* **Scalability:** Exposes parallelism both within a reasoning workflow and
+  across concurrent workflows by scheduling fine-grained DAG nodes
+  independently.
+* **Adaptability:** Separates reasoning logic from resource placement and maps
+  heterogeneous operations, including LLM inference, retrieval, tool use, and
+  data processing, to appropriate GPU or CPU workers.
+* **Verifiability:** Represents dependencies, intermediate results, and
+  execution states explicitly, supporting tracing, provenance tracking,
+  debugging, replay, and selective recovery.
 
 
 .. toctree::
@@ -30,3 +31,9 @@ Core Advantages:
    :caption: Introduction
 
    introduction
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Getting Started
+
+   getting_started

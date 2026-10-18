@@ -4,31 +4,40 @@ Introduction
 What is Wenbo?
 --------------
 
-Wenbo is an event-driven scheduling runtime for multi-agent reasoning
-workloads. It represents each workflow as a directed acyclic graph (DAG),
-where nodes are independently schedulable units of work and edges define the
-dependencies between them.
+Wenbo is a DAG-based serving system designed to scale agent reasoning across
+heterogeneous computing resources. Each agent task is represented as a
+dynamic reasoning graph whose nodes describe atomic computation steps, such
+as LLM inference, tool invocation, retrieval, verification, and data
+processing. Edges express the dependencies between those steps.
 
-Wenbo coordinates all admitted DAGs through a shared scheduling loop. It
-tracks dependency state, selects ready nodes according to a configurable
-policy, places them on compatible CPU or GPU workers, and records the
-resulting execution timeline.
+Unlike a static workflow, the complete reasoning graph does not need to be
+known before execution begins. Wenbo evolves the graph as intermediate model
+outputs and tool results become available, incrementally materializing the
+resolved portions into executable DAG flows. Ready DAG nodes can then be
+scheduled independently across a shared pool of GPU and CPU workers.
 
 Why Wenbo?
 ----------
 
-Agent workflows commonly combine GPU-intensive model inference with
-CPU-intensive retrieval, tool execution, and data processing. When an entire
-workflow is bound to a fixed set of resources, one device can remain idle
-while another becomes a bottleneck. Running multiple workflows independently
-can further increase resource fragmentation.
+Existing agent systems commonly use task-level resource ownership: each task
+receives a fixed GPU-CPU bundle and retains both resources for its entire
+lifetime. This model is inefficient because agent execution alternates
+between GPU-intensive LLM inference and CPU-intensive orchestration,
+retrieval, tool execution, and data processing. While one phase runs, part of
+the reserved bundle can remain idle, creating resource fragmentation and
+limiting cluster-wide utilization.
 
-Wenbo decouples workflow progress from worker allocation. Ready nodes from
-all active DAGs enter a shared scheduling domain and are dispatched only when
-their dependencies and resource requirements are satisfied. This approach
-improves resource utilization, increases throughput for mixed CPU/GPU
-workloads, and allows scheduling policies to operate across workflow
-boundaries.
+Wenbo replaces task-level ownership with node-level scheduling. All ready
+nodes from all active DAGs enter a global scheduling domain and are dispatched
+to compatible idle workers as soon as their dependencies are satisfied. GPU
+and CPU work can therefore progress independently across different tasks,
+allowing otherwise idle capacity to serve another workflow.
+
+The achievable throughput gain depends primarily on the alignment between the
+system's GPU/CPU resource ratio and each task's GPU/CPU workload ratio. The
+largest gains occur when the more abundant resource also carries more of the
+workload; if the scarce resource is already the bottleneck, DAG-level
+scheduling provides limited additional benefit.
 
 Architecture
 ------------
@@ -38,8 +47,8 @@ Architecture
    :width: 100%
    :align: center
 
-Wenbo separates workload orchestration, global scheduling, and node execution
-into three primary components:
+Wenbo separates reasoning orchestration, global scheduling, and hardware
+execution into three primary components:
 
 .. list-table::
    :header-rows: 1
@@ -48,41 +57,49 @@ into three primary components:
    * - Component
      - Responsibility
    * - Director
-     - Validates and normalizes an executable DAG before admitting it to the
-       runtime. The current implementation accepts an already materialized
-       DAG at this boundary.
+     - Acts as the reasoning control plane. It constructs the initial
+       reasoning graph, maintains task context, incrementally materializes
+       executable DAG flows, and evolves the graph in response to execution
+       results.
    * - Scheduler
-     - Tracks DAG state, maintains the global set of ready nodes, applies the
-       configured policy, and dispatches work within concurrency limits.
+     - Maintains a global view of executable nodes and DAG state, maps each
+       ready node to a suitable GPU or CPU worker, monitors execution, and
+       communicates intermediate state back to the Director.
    * - Workers
-     - Execute nodes on compatible CPU or GPU resources through a pluggable
-       backend and report completion or failure to the runtime.
+     - Execute individual DAG nodes and manage local resources such as CPUs,
+       GPUs, memory, models, caches, and runtime environments. They report
+       outputs, execution status, utilization, timing, and failures to the
+       Scheduler.
 
-After a DAG is admitted, its dependency-free nodes become ready for
-scheduling. The Scheduler selects ready nodes and assigns them to compatible
-Workers. Each completion updates the DAG state and unlocks newly eligible
-successors. This event-driven cycle continues until the DAG succeeds, fails,
-or is cancelled.
+The Director materializes executable work from the current reasoning state.
+The Scheduler dispatches dependency-free nodes to compatible Workers without
+reserving a fixed worker bundle for the whole task. Each completion releases
+the Worker, updates the DAG state, unlocks eligible successors, and may cause
+the Director to refine the reasoning graph. This feedback loop continues as
+the agent reasoning process evolves.
 
 Core Capabilities
 -----------------
 
-Wenbo currently provides:
+Wenbo provides the following system capabilities:
 
-* **Multi-DAG Execution:** Runs multiple DAGs through one event-driven runtime
-  while tracking the state and dependencies of each workflow.
-* **Resource-Aware Placement:** Matches CPU, GPU, and hardware-agnostic nodes
-  to workers with compatible capabilities.
-* **Pluggable Scheduling Policies:** Includes FIFO, priority,
-  shortest-job-first, fair round-robin, and fair shortest-job-first policies.
-* **Controlled Concurrency:** Enforces execution limits through an in-process
-  worker pool and explicit worker leases.
-* **Execution Reliability:** Supports node timeouts, cancellation, failure
-  propagation, and configurable retries.
-* **Dependency Output Resolution:** Makes completed upstream outputs available
-  to downstream prompts during execution.
-* **Operational Observability:** Records lifecycle events, scheduling
-  decisions, resource activity, and execution timelines.
-* **Workload Evaluation:** Provides synthetic workload support, HotpotQA
-  conversion, and deterministic discrete-event simulation for scheduling
-  experiments.
+* **Dynamic DAG Generation:** Builds and continuously refines reasoning graphs
+  as intermediate outputs reveal new steps, branches, or termination
+  conditions.
+* **Incremental Materialization:** Converts the currently resolved portion of
+  a reasoning graph into executable DAG flows without requiring a complete
+  execution plan in advance.
+* **Global Dependency-Aware Scheduling:** Discovers ready nodes across all
+  active DAGs and schedules them while preserving every intra-task
+  dependency.
+* **Heterogeneous Node Execution:** Places GPU-intensive inference on GPU
+  workers and CPU-oriented orchestration, retrieval, tools, and data
+  processing on CPU workers.
+* **Fine-Grained Parallelism:** Exploits independent branches within one agent
+  workflow as well as parallelism across multiple concurrent workflows.
+* **Elastic Fault Tolerance:** Reschedules retryable nodes after Worker
+  failures while preserving completed nodes and intermediate results, avoiding
+  a full DAG restart when recovery state is available.
+* **Execution Verifiability:** Maintains explicit dependencies, intermediate
+  results, execution states, and runtime feedback to support provenance,
+  tracing, debugging, replay, and selective recovery.

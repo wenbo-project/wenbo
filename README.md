@@ -26,10 +26,12 @@ python examples/quickstart.py
 
 The example schedules the DAG in `examples/dags/quickstart.json` with the mock executor and writes its result to `.local/quickstart/result.json`. A successful run ends with `completed=1, failed=0`.
 
+For complete setup and verification instructions, see the [Getting Started guide](https://wenbo.readthedocs.io/en/latest/getting_started.html).
+
 Try another scheduling policy or simulated latency:
 
 ```bash
-python examples/quickstart.py --policy priority --mock-mode fixed --base-latency-ms 20
+python examples/quickstart.py --policy priority --mock-mode estimated --base-latency-ms 20
 python examples/quickstart.py --help
 ```
 

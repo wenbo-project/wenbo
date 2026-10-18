@@ -62,6 +62,7 @@ design/dag_view.html
 /src/wenbo/utils/
 /docs/*
 !/docs/dag-schema.md
+!/docs/source/
 /tests/*
 !/tests/test_quickstart.py
 /*.md
