@@ -60,7 +60,7 @@ python -u examples/quickstart.py --benchmark-root ../benchmark
 
 If you already have either checkout, use its existing directory. The benchmark must include the matching datasets and support --profile quickstart; see the [setup requirements](docs/quickstart.md#prepare-the-environment-and-benchmark).
 
-The default run compares Wenbo with the Flash-Searcher baseline on StrategyQA, MuSiQue, ToolBench, and ALFWorld, using **2 GPU slots, 16 CPU slots, and three seeds** (24 simulations). It uses discrete-event virtual time and requires no physical GPU, model download, or API key.
+The default run compares Wenbo with the Flash-Searcher baseline on StrategyQA, MuSiQue, ToolBench, and ALFWorld. It uses discrete-event virtual time and requires no physical GPU, model download, or API key.
 
 The terminal reports throughput, resource utilization, and speedup. Reports are saved to .local/quickstart-gpu2-cpu16/; reusing an output directory overwrites its reports. For a smaller first run:
 
