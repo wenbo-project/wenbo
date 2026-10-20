@@ -20,7 +20,7 @@ Wenbo addresses resource fragmentation in large-scale agent serving by dynamical
 
 ![Wenbo architecture: Director, Scheduler, and Workers](docs/_static/wenbo_architecture.png)
 
-Wenbo separates reasoning orchestration, global node scheduling, and heterogeneous execution through the Director, Scheduler, and Workers. 
+Wenbo separates reasoning orchestration, global node scheduling, and heterogeneous execution through the Director, Scheduler, and Workers.
 
 ## System and benchmark
 
@@ -32,31 +32,31 @@ Both distributions use the import name wenbo. Keep benchmark development in a se
 
 Requires **Python 3.10 or newer**. Clone the system repository and create a virtual environment:
 
-`ash
+```bash
 git clone https://github.com/wenbo-project/wenbo.git
 cd wenbo
 python -m venv .venv
-`
+```
 
 Activate it on macOS / Linux:
 
-`ash
+```bash
 source .venv/bin/activate
-`
+```
 
 Or on Windows PowerShell:
 
-`powershell
+```powershell
 .venv\Scripts\Activate.ps1
-`
+```
 
 Install Wenbo, obtain the benchmark checkout, and run the experiment:
 
-`ash
+```bash
 python -m pip install -e .
 git clone https://github.com/wenbo-project/ARGB ../benchmark
 python -u examples/quickstart.py --benchmark-root ../benchmark
-`
+```
 
 If you already have either checkout, use its existing directory. The benchmark must include the matching datasets and support --profile quickstart; see the [setup requirements](docs/quickstart.md#prepare-the-environment-and-benchmark).
 
@@ -64,9 +64,9 @@ The default run compares Wenbo with the Flash-Searcher baseline on StrategyQA, M
 
 The terminal reports throughput, resource utilization, and speedup. Reports are saved to .local/quickstart-gpu2-cpu16/; reusing an output directory overwrites its reports. For a smaller first run:
 
-`ash
+```bash
 python -u examples/quickstart.py --benchmark-root ../benchmark --limit 3 --seeds 11 --output-dir .local/paper-smoke
-`
+```
 
 See the [Quick Start guide](docs/quickstart.md) for the experiment protocol, command-line options, result validation, and troubleshooting.
 
