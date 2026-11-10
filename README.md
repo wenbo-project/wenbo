@@ -1,8 +1,6 @@
 # Wenbo
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/) [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE) [![Paper](https://img.shields.io/badge/Paper-PDF-b31b1b?style=flat-square)](paper/Wenbo%EF%BC%9AScaling%20Agent%20Reasoning%20via%20Dynamic%20DAG%20Scheduling.pdf) [![Documentation](https://img.shields.io/badge/Documentation-latest-0073b7?style=flat-square&logo=readthedocs&logoColor=white)](https://wenbo.readthedocs.io/en/latest/index.html)
-
-The latest manuscript is temporarily hosted here while the arXiv version is being updated.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/) [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE) [![Preprint](https://img.shields.io/badge/Preprints.org-Preprint-orange.svg)](https://www.preprints.org/manuscript/202611.0942) [![Documentation](https://img.shields.io/badge/Documentation-latest-0073b7?style=flat-square&logo=readthedocs&logoColor=white)](https://wenbo.readthedocs.io/en/latest/index.html)
 
 Wenbo is an event-driven scheduler for multiple DAG-shaped LLM workflows with bounded concurrency. It provides dependency tracking, logical resource slots, pluggable scheduling policies, execution backends, and runtime records.
 
