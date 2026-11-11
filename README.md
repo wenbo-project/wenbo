@@ -84,3 +84,20 @@ Browse the [online documentation](https://wenbo.readthedocs.io/en/latest/) or us
 ## License
 
 Released under the [MIT License](LICENSE).
+
+## Citation
+
+If you use Wenbo in your research, please cite:
+
+```bibtex
+@article{202611.0942,
+  doi = {10.20944/preprints202611.0942.v1},
+  url = {https://doi.org/10.20944/preprints202611.0942.v1},
+  year = {2026},
+  month = {November},
+  publisher = {Preprints},
+  author = {Feiyang Chen and Junqing Yang and Wentao Zhang and Zheng Wang and Li Pan and Jianhua Li},
+  title = {Wenbo: Scaling Agent Reasoning via Dynamic DAG Scheduling},
+  journal = {Preprints}
+}
+```
